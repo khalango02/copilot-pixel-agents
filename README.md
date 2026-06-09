@@ -4,6 +4,8 @@ Visualize seus agentes de IA como personagens pixel art animados em um escritór
 
 Compatível com **GitHub Copilot Agent Mode** e **Claude Code**.
 
+![Escritório pixel art com agentes animados](.github/preview.gif)
+
 ---
 
 ## Como funciona
