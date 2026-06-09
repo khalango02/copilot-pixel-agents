@@ -141,10 +141,11 @@ export function drawFurniture(
   key: string,
   destX: number,
   destY: number,
+  scale = 1,
 ): boolean {
   const img = furnitureImages.get(key);
   if (!img?.complete || img.naturalWidth === 0) return false;
-  ctx.drawImage(img, destX, destY);
+  ctx.drawImage(img, destX, destY, img.naturalWidth * scale, img.naturalHeight * scale);
   return true;
 }
 

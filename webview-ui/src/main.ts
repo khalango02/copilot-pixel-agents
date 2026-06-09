@@ -28,10 +28,14 @@ document.addEventListener('DOMContentLoaded', () => {
   statusBar.textContent = 'Connecting…';
   app.appendChild(statusBar);
 
-  // Canvas
+  // Canvas wrapper — flex:1 goes here so canvas intrinsic size doesn't fight the layout
+  const canvasWrap = document.createElement('div');
+  canvasWrap.id = 'canvas-wrap';
+  app.appendChild(canvasWrap);
+
   const canvas = document.createElement('canvas');
   canvas.id = 'office-canvas';
-  app.appendChild(canvas);
+  canvasWrap.appendChild(canvas);
 
   // Bottom panel
   const bottomPanel = document.createElement('div');
@@ -51,9 +55,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const office = createOffice(canvas);
 
   // ── Canvas responsive sizing via ResizeObserver ──────────────────────────
-  // Initial size — set before first paint so canvas isn't 0×0
-  const initialW = canvas.offsetWidth || window.innerWidth;
-  const initialH = Math.max(120, window.innerHeight - 80);
+  // Initial size from wrapper (canvas itself has no intrinsic CSS size yet)
+  const initialW = canvasWrap.offsetWidth || window.innerWidth;
+  const initialH = canvasWrap.offsetHeight || Math.max(120, window.innerHeight - 80);
   resizeOffice(office, initialW, initialH);
 
   const ro = new ResizeObserver((entries) => {
@@ -62,7 +66,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (width > 0 && height > 0) resizeOffice(office, width, height);
     }
   });
-  ro.observe(canvas);
+  ro.observe(canvasWrap);
 
   startLoop(office);
 

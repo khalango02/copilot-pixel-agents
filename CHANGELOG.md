@@ -1,6 +1,17 @@
 # Changelog
 
-## [0.2.0] — 2026-06-09 (current)
+## [0.3.0] — 2026-06-09 (current)
+
+### Added / Changed
+- Pixel art office visual overhaul:
+  - Dark wood plank floor (programmatic — no more light gray tile PNGs)
+  - Navy office wall with pixel art windows and baseboard
+  - All rendering at 2× scale via ctx.scale() — characters are 32×64 px (was 16×32)
+  - Workstation furniture (desk, PC monitor, chair) properly scaled and aligned
+- Layout fix: canvas now lives in a `#canvas-wrap` flex wrapper so the bottom panel with agent chips always stays visible regardless of canvas size
+- Bottom panel agent chips always visible; `height: 100%` replaces brittle `100vh` in CSS
+
+## [0.2.0] — 2026-06-09
 
 ### Added
 - Real pixel-art sprites for characters (6 palettes)
