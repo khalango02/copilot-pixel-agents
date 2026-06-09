@@ -5,6 +5,7 @@ import {
   onToolDone,
   onToolStart,
   removeCharacter,
+  resizeOffice,
   setIdle,
   setWaiting,
   startLoop,
@@ -12,220 +13,123 @@ import {
 import type { Character } from './engine.js';
 import type { ClientMessage, ServerMessage } from './types.js';
 
-declare const acquireVsCodeApi: () => {
-  postMessage: (msg: ClientMessage) => void;
-};
-
+declare const acquireVsCodeApi: () => { postMessage: (msg: ClientMessage) => void };
 const vscode = acquireVsCodeApi();
-function post(msg: ClientMessage): void {
-  vscode.postMessage(msg);
-}
-
-// ─── State ────────────────────────────────────────────────────────────────────
-
-// Mirror of character data for the sidebar/inspection panel
-const agentMeta = new Map<string, { id: string; name: string }>();
+function post(msg: ClientMessage): void { vscode.postMessage(msg); }
 
 // ─── Bootstrap ───────────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
   const app = document.getElementById('app')!;
 
-  // ── Status bar
+  // Status bar
   const statusBar = document.createElement('div');
   statusBar.id = 'status-bar';
-  statusBar.textContent = 'Connecting to hooks server…';
+  statusBar.textContent = 'Connecting…';
   app.appendChild(statusBar);
-
-  // ── Main area (canvas + right panel)
-  const mainArea = document.createElement('div');
-  mainArea.id = 'main-area';
-  app.appendChild(mainArea);
 
   // Canvas
   const canvas = document.createElement('canvas');
   canvas.id = 'office-canvas';
-  mainArea.appendChild(canvas);
+  app.appendChild(canvas);
 
+  // Bottom panel
+  const bottomPanel = document.createElement('div');
+  bottomPanel.id = 'bottom-panel';
+  app.appendChild(bottomPanel);
+
+  const agentsStrip = document.createElement('div');
+  agentsStrip.id = 'agents-strip';
+  bottomPanel.appendChild(agentsStrip);
+
+  const inspector = document.createElement('div');
+  inspector.id = 'inspector';
+  inspector.style.display = 'none';
+  bottomPanel.appendChild(inspector);
+
+  // Create office (sets up click handler)
   const office = createOffice(canvas);
 
-  // ── Right panel (teams + inspector)
-  const rightPanel = document.createElement('div');
-  rightPanel.id = 'right-panel';
-  mainArea.appendChild(rightPanel);
+  // ── Canvas responsive sizing via ResizeObserver ──────────────────────────
+  // Initial size — set before first paint so canvas isn't 0×0
+  const initialW = canvas.offsetWidth || window.innerWidth;
+  const initialH = Math.max(120, window.innerHeight - 80);
+  resizeOffice(office, initialW, initialH);
 
-  // Teams section
-  const teamsSection = document.createElement('div');
-  teamsSection.id = 'teams-section';
-  teamsSection.innerHTML = '<div class="panel-title">AGENTS</div>';
-  rightPanel.appendChild(teamsSection);
-
-  const teamsList = document.createElement('div');
-  teamsList.id = 'teams-list';
-  teamsSection.appendChild(teamsList);
-
-  // Inspector section
-  const inspectorSection = document.createElement('div');
-  inspectorSection.id = 'inspector-section';
-  inspectorSection.innerHTML = '<div class="panel-title">INSPECTOR</div>';
-  inspectorSection.style.display = 'none';
-  rightPanel.appendChild(inspectorSection);
-
-  const inspectorContent = document.createElement('div');
-  inspectorContent.id = 'inspector-content';
-  inspectorSection.appendChild(inspectorContent);
-
-  // ── Wire canvas click → inspector
-  office.onCharacterClick = (id: string) => {
-    const char = office.characters.get(id);
-    if (char) {
-      inspectorSection.style.display = 'flex';
-      renderInspector(inspectorContent, char);
-      updateTeamsList(teamsList, office, id);
-    }
-  };
-
-  // Deselect also hides inspector
-  canvas.addEventListener('click', () => {
-    const anySelected = [...office.characters.values()].some((c) => c.selected);
-    if (!anySelected) {
-      inspectorSection.style.display = 'none';
+  const ro = new ResizeObserver((entries) => {
+    for (const entry of entries) {
+      const { width, height } = entry.contentRect;
+      if (width > 0 && height > 0) resizeOffice(office, width, height);
     }
   });
+  ro.observe(canvas);
 
   startLoop(office);
 
-  // ── Helpers
-  function updateTeamsList(
-    container: HTMLElement,
-    off: typeof office,
-    selectedId?: string,
-  ): void {
-    container.innerHTML = '';
-    if (off.characters.size === 0) {
-      container.innerHTML = '<div class="agent-card-empty">No agents running</div>';
-      return;
-    }
-    for (const c of off.characters.values()) {
-      const card = document.createElement('div');
-      card.className = 'agent-card' + (c.id === selectedId ? ' selected' : '');
-      card.innerHTML = `
-        <div class="agent-card-name">${esc(c.name)}</div>
-        <div class="agent-card-status ${c.activity}">${activityLabel(c.activity)}</div>
-        <div class="agent-card-tools">${[...c.activeTools.values()].map((t) => esc(t.name)).join(', ') || '—'}</div>
-        <div class="agent-card-tokens">↑${fmt(c.inputTokens)} ↓${fmt(c.outputTokens)}</div>
-      `;
-      card.addEventListener('click', () => {
-        for (const ch of off.characters.values()) ch.selected = false;
-        c.selected = true;
-        inspectorSection.style.display = 'flex';
-        renderInspector(inspectorContent, c);
-        updateTeamsList(container, off, c.id);
-      });
-      container.appendChild(card);
-    }
-  }
+  // ── Inspector logic ──────────────────────────────────────────────────────
+  office.onCharacterClick = (id: string) => {
+    if (!id) { inspector.style.display = 'none'; return; }
+    const char = office.characters.get(id);
+    if (!char) return;
+    inspector.style.display = 'block';
+    renderInspector(inspector, char);
+    renderAgentsStrip(agentsStrip, office, id);
+  };
 
-  function renderInspector(container: HTMLElement, char: Character): void {
-    const dur = Math.round((Date.now() - char.sessionStartedAt) / 1000);
-    const durStr = dur < 60 ? `${dur}s` : `${Math.floor(dur / 60)}m ${dur % 60}s`;
-
-    const historyHtml = char.toolHistory.slice(0, 15).map((e) => {
-      const elapsed = e.finishedAt
-        ? `${e.finishedAt - e.startedAt}ms`
-        : '<span class="running">running…</span>';
-      return `<div class="history-entry">
-        <span class="history-icon">${statusIcon(e.status)}</span>
-        <span class="history-name" title="${esc(e.toolName)}">${esc(shortName(e.toolName))}</span>
-        <span class="history-time">${elapsed}</span>
-      </div>`;
-    }).join('') || '<div class="history-empty">No tools used yet</div>';
-
-    container.innerHTML = `
-      <div class="inspector-header">
-        <div class="inspector-name">${esc(char.name)}</div>
-        <div class="inspector-id">${esc(char.id.slice(0, 12))}…</div>
-      </div>
-      <div class="inspector-stats">
-        <div class="stat"><span class="stat-label">Status</span><span class="stat-value ${char.activity}">${activityLabel(char.activity)}</span></div>
-        <div class="stat"><span class="stat-label">Duration</span><span class="stat-value">${durStr}</span></div>
-        <div class="stat"><span class="stat-label">Input</span><span class="stat-value">${fmt(char.inputTokens)} tok</span></div>
-        <div class="stat"><span class="stat-label">Output</span><span class="stat-value">${fmt(char.outputTokens)} tok</span></div>
-      </div>
-      <div class="inspector-section-title">Active tools</div>
-      <div class="active-tools">
-        ${[...char.activeTools.values()].map((t) =>
-          `<div class="active-tool ${t.status}">${statusIcon(t.status)} ${esc(t.name)}</div>`
-        ).join('') || '<div class="history-empty">—</div>'}
-      </div>
-      <div class="inspector-section-title">Tool history</div>
-      <div class="history-list">${historyHtml}</div>
-    `;
-  }
-
-  // ── Message handler
+  // ── Message handler ──────────────────────────────────────────────────────
   window.addEventListener('message', (event: MessageEvent<ServerMessage>) => {
     const msg = event.data;
     switch (msg.type) {
       case 'serverPort':
-        statusBar.textContent = `Hooks server on localhost:${msg.port}`;
+        statusBar.textContent = `Hooks server → localhost:${msg.port}`;
         break;
 
       case 'existingAgents':
-        for (const a of msg.agents) {
-          agentMeta.set(a.id, a);
-          addCharacter(office, a.id, a.name);
-        }
-        updateTeamsList(teamsList, office);
+        for (const a of msg.agents) addCharacter(office, a.id, a.name);
+        renderAgentsStrip(agentsStrip, office);
         break;
 
       case 'agentCreated':
-        agentMeta.set(msg.id, { id: msg.id, name: msg.name });
         addCharacter(office, msg.id, msg.name);
-        updateTeamsList(teamsList, office);
+        renderAgentsStrip(agentsStrip, office);
         break;
 
       case 'agentRemoved':
-        agentMeta.delete(msg.id);
         removeCharacter(office, msg.id);
-        inspectorSection.style.display = 'none';
-        updateTeamsList(teamsList, office);
+        inspector.style.display = 'none';
+        renderAgentsStrip(agentsStrip, office);
         break;
 
       case 'agentToolStart': {
         onToolStart(office, msg.id, msg.toolId, msg.toolName, msg.status);
-        const sel = [...office.characters.values()].find((c) => c.selected);
-        if (sel?.id === msg.id) renderInspector(inspectorContent, sel);
-        updateTeamsList(teamsList, office, sel?.id);
+        const sel = selectedChar(office);
+        if (sel?.id === msg.id) renderInspector(inspector, sel);
+        renderAgentsStrip(agentsStrip, office, sel?.id);
         break;
       }
 
       case 'agentToolDone': {
         onToolDone(office, msg.id, msg.toolId);
-        const sel = [...office.characters.values()].find((c) => c.selected);
-        if (sel?.id === msg.id) renderInspector(inspectorContent, sel);
-        updateTeamsList(teamsList, office, sel?.id);
+        const sel = selectedChar(office);
+        if (sel?.id === msg.id) renderInspector(inspector, sel);
+        renderAgentsStrip(agentsStrip, office, sel?.id);
         break;
       }
 
       case 'agentStatus': {
         if (msg.status === 'waiting') setWaiting(office, msg.id);
         else if (msg.status === 'idle') setIdle(office, msg.id);
-        const sel = [...office.characters.values()].find((c) => c.selected);
-        if (sel?.id === msg.id) renderInspector(inspectorContent, sel);
-        updateTeamsList(teamsList, office, sel?.id);
+        const sel = selectedChar(office);
+        if (sel?.id === msg.id) renderInspector(inspector, sel);
+        renderAgentsStrip(agentsStrip, office, sel?.id);
         break;
       }
 
       case 'agentTokenUsage': {
         const c = office.characters.get(msg.id);
-        if (c) {
-          c.inputTokens = msg.inputTokens;
-          c.outputTokens = msg.outputTokens;
-        }
-        const sel = [...office.characters.values()].find((c2) => c2.selected);
-        if (sel?.id === msg.id) renderInspector(inspectorContent, sel);
-        updateTeamsList(teamsList, office, sel?.id);
+        if (c) { c.inputTokens = msg.inputTokens; c.outputTokens = msg.outputTokens; }
+        const sel = selectedChar(office);
+        if (sel?.id === msg.id) renderInspector(inspector, sel);
         break;
       }
     }
@@ -234,12 +138,91 @@ document.addEventListener('DOMContentLoaded', () => {
   post({ type: 'webviewReady' });
 });
 
+// ─── UI helpers ──────────────────────────────────────────────────────────────
+
+function renderAgentsStrip(
+  container: HTMLElement,
+  office: ReturnType<typeof createOffice>,
+  selectedId?: string,
+): void {
+  container.innerHTML = '';
+  if (office.characters.size === 0) {
+    container.innerHTML = '<span class="agents-empty">No agents running</span>';
+    return;
+  }
+  for (const c of office.characters.values()) {
+    const chip = document.createElement('div');
+    chip.className = 'agent-chip' + (c.id === selectedId ? ' selected' : '');
+    chip.innerHTML = `
+      <div class="agent-chip-dot ${c.activity}"></div>
+      <span class="agent-chip-name" title="${esc(c.id)}">${esc(c.name)}</span>
+    `;
+    chip.addEventListener('click', () => {
+      for (const ch of office.characters.values()) ch.selected = false;
+      c.selected = true;
+      const inspector = document.getElementById('inspector')!;
+      inspector.style.display = 'block';
+      renderInspector(inspector, c);
+      renderAgentsStrip(container, office, c.id);
+    });
+    container.appendChild(chip);
+  }
+}
+
+function renderInspector(container: HTMLElement, char: Character): void {
+  const dur = Math.round((Date.now() - char.sessionStartedAt) / 1000);
+  const durStr = dur < 60 ? `${dur}s` : `${Math.floor(dur / 60)}m ${dur % 60}s`;
+
+  const activeHtml = [...char.activeTools.values()]
+    .map((t) => `<span class="active-tool ${t.status}">${statusIcon(t.status)} ${esc(t.name)}</span>`)
+    .join('') || '—';
+
+  const histHtml = char.toolHistory.slice(0, 12)
+    .map((e) => {
+      const ms = e.finishedAt ? `${e.finishedAt - e.startedAt}ms` : `<span class="history-running">…</span>`;
+      return `<div class="history-entry">
+        <span class="history-icon">${statusIcon(e.status)}</span>
+        <span class="history-name" title="${esc(e.toolName)}">${esc(shortName(e.toolName))}</span>
+        <span class="history-time">${ms}</span>
+      </div>`;
+    }).join('') || '<div class="history-empty">No tools yet</div>';
+
+  container.innerHTML = `
+    <div class="inspector-header">
+      <span class="inspector-name">${esc(char.name)}</span>
+      <button class="inspector-close" id="inspector-close-btn">✕</button>
+    </div>
+    <div class="inspector-stats">
+      <div class="stat"><span class="stat-label">Status</span><span class="stat-value ${char.activity}">${actLabel(char.activity)}</span></div>
+      <div class="stat"><span class="stat-label">Uptime</span><span class="stat-value">${durStr}</span></div>
+      <div class="stat"><span class="stat-label">In</span><span class="stat-value">${fmt(char.inputTokens)}</span></div>
+      <div class="stat"><span class="stat-label">Out</span><span class="stat-value">${fmt(char.outputTokens)}</span></div>
+    </div>
+    <div class="inspector-row-title">Active</div>
+    <div class="active-tools">${activeHtml}</div>
+    <div class="inspector-row-title">History</div>
+    <div class="history-list">${histHtml}</div>
+  `;
+
+  document.getElementById('inspector-close-btn')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    container.style.display = 'none';
+    for (const ch of (window as any).__office?.characters?.values() ?? []) {
+      (ch as Character).selected = false;
+    }
+  });
+}
+
 // ─── Utils ────────────────────────────────────────────────────────────────────
+
+function selectedChar(office: ReturnType<typeof createOffice>): Character | undefined {
+  return [...office.characters.values()].find((c) => c.selected);
+}
 
 function fmt(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
-  return String(n);
+  return String(n || 0);
 }
 
 function esc(s: string): string {
@@ -248,27 +231,20 @@ function esc(s: string): string {
 
 function shortName(name: string): string {
   const n = name.replace(/([A-Z])/g, ' $1').trim();
-  return n.length > 16 ? n.slice(0, 15) + '…' : n;
+  return n.length > 18 ? n.slice(0, 17) + '…' : n;
 }
 
-function activityLabel(activity: string): string {
-  switch (activity) {
-    case 'typing': return '⌨ Writing';
-    case 'reading': return '📖 Reading';
-    case 'running': return '⚙ Running';
-    case 'searching': return '🔍 Searching';
-    case 'waiting': return '⏳ Waiting';
-    case 'walking': return '🚶 Walking';
-    default: return '💤 Idle';
-  }
+function actLabel(a: string): string {
+  const map: Record<string, string> = {
+    typing: '⌨ Writing', reading: '📖 Reading', running: '⚙ Running',
+    searching: '🔍 Searching', waiting: '⏳ Waiting', walking: '🚶 Walking', idle: '💤 Idle',
+  };
+  return map[a] ?? a;
 }
 
-function statusIcon(status: string): string {
-  switch (status) {
-    case 'reading': return '📖';
-    case 'writing': return '✏️';
-    case 'running': return '⚙️';
-    case 'searching': return '🔍';
-    default: return '🔧';
-  }
+function statusIcon(s: string): string {
+  const map: Record<string, string> = {
+    reading: '📖', writing: '✏️', running: '⚙️', searching: '🔍', other: '🔧',
+  };
+  return map[s] ?? '🔧';
 }
