@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.2.0] — 2026-06-09
+## [0.2.0] — 2026-06-09 (current)
 
 ### Added
 - Real pixel-art sprites for characters (6 palettes)

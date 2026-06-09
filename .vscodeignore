@@ -13,3 +13,5 @@ tsconfig.json
 .eslintrc*
 **/*.test.*
 **/.github/**
+.vscode/**
+media/icon.svg
