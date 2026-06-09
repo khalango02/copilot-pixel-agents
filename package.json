@@ -1,0 +1,80 @@
+{
+  "name": "copilot-pixel-agents",
+  "displayName": "Copilot Pixel Agents",
+  "description": "Visualize GitHub Copilot agents as animated pixel-art characters in a virtual office",
+  "version": "0.1.0",
+  "publisher": "cl-oliveira",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": ["Other", "Visualization"],
+  "keywords": ["copilot", "agents", "pixel-art", "visualization", "ai"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "copilot-pixel-agents",
+          "title": "Copilot Pixel Agents",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "copilot-pixel-agents": [
+        {
+          "type": "webview",
+          "id": "copilotPixelAgents.officeView",
+          "name": "Pixel Office"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "copilotPixelAgents.showPanel",
+        "title": "Show Pixel Office",
+        "category": "Copilot Pixel Agents"
+      },
+      {
+        "command": "copilotPixelAgents.installHooks",
+        "title": "Install Copilot Hooks",
+        "category": "Copilot Pixel Agents"
+      },
+      {
+        "command": "copilotPixelAgents.showHooksConfig",
+        "title": "Show Hooks Configuration",
+        "category": "Copilot Pixel Agents"
+      }
+    ],
+    "configuration": {
+      "title": "Copilot Pixel Agents",
+      "properties": {
+        "copilotPixelAgents.port": {
+          "type": "number",
+          "default": 7823,
+          "description": "Local port for the hooks HTTP server"
+        },
+        "copilotPixelAgents.autoShowPanel": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically show the pixel office panel on startup"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.js",
+    "build:webview": "cd webview-ui && npm run build",
+    "dev": "node esbuild.js --watch",
+    "vscode:prepublish": "npm run build:webview && npm run build",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.95.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.7.0"
+  }
+}

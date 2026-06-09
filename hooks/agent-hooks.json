@@ -1,0 +1,29 @@
+{
+  "_comment": "Copilot Pixel Agents — VS Code Agent Hooks configuration (Preview feature).\nCopy or merge this file into ~/.vscode/agent-hooks.json to activate.\nFor Claude Code, merge the 'hooks' entries into ~/.claude/settings.json",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "command": "~/.copilot-pixel-agents/hook.sh",
+        "env": {
+          "HOOK_EVENT": "pre_tool_use"
+        }
+      }
+    ],
+    "PostToolUse": [
+      {
+        "command": "~/.copilot-pixel-agents/hook.sh",
+        "env": {
+          "HOOK_EVENT": "post_tool_use"
+        }
+      }
+    ],
+    "Stop": [
+      {
+        "command": "~/.copilot-pixel-agents/hook.sh",
+        "env": {
+          "HOOK_EVENT": "stop"
+        }
+      }
+    ]
+  }
+}

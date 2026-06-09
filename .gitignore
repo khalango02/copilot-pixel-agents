@@ -1,0 +1,5 @@
+node_modules/
+webview-ui/node_modules/
+dist/
+*.vsix
+.env

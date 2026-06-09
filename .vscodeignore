@@ -1,0 +1,12 @@
+**/.git/**
+**/node_modules/**
+webview-ui/node_modules/**
+webview-ui/src/**
+src/**
+*.ts
+*.map
+esbuild.js
+tsconfig.json
+.editorconfig
+.prettierrc*
+.eslintrc*
