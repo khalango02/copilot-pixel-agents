@@ -1,6 +1,14 @@
 # Changelog
 
-## [0.3.0] — 2026-06-09 (current)
+## [0.4.0] — 2026-06-09 (current)
+
+### Changed
+- **Zero-friction setup:** `Install Hooks` now auto-configures GitHub Copilot (`~/.vscode/agent-hooks.json`) AND Claude Code (`~/.claude/settings.json`) in one click — no manual file editing required
+- First-launch prompt: on activation, extension offers to install hooks automatically
+- Hook script (`hook.sh`) updated to support Claude Code's stdin-based JSON format alongside Copilot's env-var format
+- README rewritten to reflect Marketplace-first installation (no need to clone)
+
+## [0.3.0] — 2026-06-09
 
 ### Added / Changed
 - Pixel art office visual overhaul:
