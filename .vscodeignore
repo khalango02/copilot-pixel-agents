@@ -2,6 +2,7 @@
 **/node_modules/**
 webview-ui/node_modules/**
 webview-ui/src/**
+webview-ui/public/**
 src/**
 *.ts
 *.map
@@ -10,3 +11,5 @@ tsconfig.json
 .editorconfig
 .prettierrc*
 .eslintrc*
+**/*.test.*
+**/.github/**

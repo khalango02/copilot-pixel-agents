@@ -1,5 +1,13 @@
 export type ToolStatus = 'reading' | 'writing' | 'running' | 'searching' | 'thinking' | 'other';
 
+export interface ToolHistoryEntry {
+  toolId: string;
+  toolName: string;
+  status: ToolStatus;
+  startedAt: number;
+  finishedAt?: number;
+}
+
 export type ServerMessage =
   | { type: 'agentCreated'; id: string; name: string }
   | { type: 'agentRemoved'; id: string }

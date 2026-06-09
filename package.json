@@ -64,16 +64,26 @@
       }
     }
   },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/khalango02/copilot-pixel-agents"
+  },
+  "bugs": {
+    "url": "https://github.com/khalango02/copilot-pixel-agents/issues"
+  },
+  "homepage": "https://github.com/khalango02/copilot-pixel-agents#readme",
   "scripts": {
     "build": "node esbuild.js",
     "build:webview": "cd webview-ui && npm run build",
     "dev": "node esbuild.js --watch",
     "vscode:prepublish": "npm run build:webview && npm run build",
-    "package": "vsce package"
+    "package": "npx @vscode/vsce package --no-dependencies",
+    "publish": "npx @vscode/vsce publish --no-dependencies"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/vscode": "^1.95.0",
+    "@vscode/vsce": "^3.0.0",
     "esbuild": "^0.24.0",
     "typescript": "^5.7.0"
   }
