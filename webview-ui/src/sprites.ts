@@ -15,6 +15,13 @@ const characterImages: HTMLImageElement[] = [];
 const furnitureImages: Map<string, HTMLImageElement> = new Map();
 let floorImages: HTMLImageElement[] = [];
 
+declare const window: Window & { ASSETS_BASE_URI?: string };
+
+function assetUrl(relativePath: string): string {
+  const base = window.ASSETS_BASE_URI ?? 'assets';
+  return `${base.replace(/\/$/, '')}/${relativePath}`;
+}
+
 let loaded = false;
 let loadPromise: Promise<void> | null = null;
 
@@ -35,7 +42,7 @@ export function loadSprites(): Promise<void> {
         img.onerror = () => res(); // fallback: skip
       }),
     );
-    img.src = `assets/characters/char_${i}.png`;
+    img.src = assetUrl(`characters/char_${i}.png`);
     characterImages.push(img);
   }
 
@@ -47,19 +54,19 @@ export function loadSprites(): Promise<void> {
         img.onerror = () => res();
       }),
     );
-    img.src = `assets/floors/floor_${i}.png`;
+    img.src = assetUrl(`floors/floor_${i}.png`);
     floorImages.push(img);
   }
 
   const furnitureFiles = [
-    ['desk_front', 'assets/furniture/DESK/DESK_FRONT.png'],
-    ['desk_side', 'assets/furniture/DESK/DESK_SIDE.png'],
-    ['chair_front', 'assets/furniture/CUSHIONED_CHAIR/CUSHIONED_CHAIR_FRONT.png'],
-    ['chair_back', 'assets/furniture/CUSHIONED_CHAIR/CUSHIONED_CHAIR_BACK.png'],
-    ['pc_off', 'assets/furniture/PC/PC_FRONT_OFF.png'],
-    ['pc_on_1', 'assets/furniture/PC/PC_FRONT_ON_1.png'],
-    ['pc_on_2', 'assets/furniture/PC/PC_FRONT_ON_2.png'],
-    ['pc_on_3', 'assets/furniture/PC/PC_FRONT_ON_3.png'],
+    ['desk_front', 'furniture/DESK/DESK_FRONT.png'],
+    ['desk_side', 'furniture/DESK/DESK_SIDE.png'],
+    ['chair_front', 'furniture/CUSHIONED_CHAIR/CUSHIONED_CHAIR_FRONT.png'],
+    ['chair_back', 'furniture/CUSHIONED_CHAIR/CUSHIONED_CHAIR_BACK.png'],
+    ['pc_off', 'furniture/PC/PC_FRONT_OFF.png'],
+    ['pc_on_1', 'furniture/PC/PC_FRONT_ON_1.png'],
+    ['pc_on_2', 'furniture/PC/PC_FRONT_ON_2.png'],
+    ['pc_on_3', 'furniture/PC/PC_FRONT_ON_3.png'],
   ];
 
   for (const [key, src] of furnitureFiles) {
@@ -70,7 +77,7 @@ export function loadSprites(): Promise<void> {
         img.onerror = () => res();
       }),
     );
-    img.src = src;
+    img.src = assetUrl(src);
     furnitureImages.set(key, img);
   }
 

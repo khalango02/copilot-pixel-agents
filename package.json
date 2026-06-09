@@ -6,7 +6,7 @@
   "publisher": "cl-oliveira",
   "license": "MIT",
   "engines": {
-    "vscode": "^1.95.0"
+    "vscode": "^1.70.0"
   },
   "categories": ["Other", "Visualization"],
   "keywords": ["copilot", "agents", "pixel-art", "visualization", "ai"],
@@ -82,7 +82,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "@types/vscode": "^1.95.0",
+    "@types/vscode": "^1.70.0",
     "@vscode/vsce": "^3.0.0",
     "esbuild": "^0.24.0",
     "typescript": "^5.7.0"

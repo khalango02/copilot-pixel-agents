@@ -90,6 +90,11 @@ export class PixelOfficeViewProvider implements vscode.WebviewViewProvider {
       vscode.Uri.joinPath(this.context.extensionUri, 'dist', 'webview', 'main.css'),
     );
     const nonce = getNonce();
+    // Base URI for loading sprite assets from the extension's dist/webview/assets/ folder.
+    // Webview JS cannot use relative paths — it needs these resolved vscode-resource:// URIs.
+    const assetsBaseUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.context.extensionUri, 'dist', 'webview', 'assets'),
+    ).toString();
 
     return `<!DOCTYPE html>
 <html lang="en">
@@ -108,6 +113,7 @@ export class PixelOfficeViewProvider implements vscode.WebviewViewProvider {
 </head>
 <body>
   <div id="app"></div>
+  <script nonce="${nonce}">window.ASSETS_BASE_URI = "${assetsBaseUri}";</script>
   <script nonce="${nonce}" src="${scriptUri}"></script>
 </body>
 </html>`;
