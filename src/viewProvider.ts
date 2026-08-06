@@ -43,11 +43,12 @@ export class PixelOfficeViewProvider implements vscode.WebviewViewProvider {
         this.sendExistingAgents();
         this.post({ type: 'serverPort', port: this.serverPort });
         break;
+      case 'installHooks':
+        vscode.commands.executeCommand('copilotPixelAgents.installHooks');
+        break;
       case 'focusAgent':
-        // TODO: focus the corresponding terminal if available
         break;
       case 'closeAgent':
-        // Agents close via session_end hook; this is a manual dismiss
         break;
     }
   }

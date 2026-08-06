@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as http from 'http';
 import * as os from 'os';
 import * as path from 'path';
+import * as vscode from 'vscode';
 import type { AgentStore } from './agentStore.js';
 import type { HookEvent } from './types.js';
 
@@ -13,6 +14,7 @@ export class HooksServer {
 
   constructor(
     private readonly store: AgentStore,
+    private readonly channel: vscode.OutputChannel,
     port = DEFAULT_PORT,
   ) {
     this.port = port;
@@ -67,9 +69,13 @@ export class HooksServer {
   private handleBody(body: string): void {
     try {
       const event = JSON.parse(body) as HookEvent;
+      const tool = 'tool_name' in event ? event.tool_name : '';
+      this.channel.appendLine(
+        `[${new Date().toLocaleTimeString()}] ← ${event.event}  session=${event.session_id.slice(0, 8)}${tool ? `  tool=${tool}` : ''}`,
+      );
       this.store.processEvent(event);
     } catch {
-      // Ignore malformed events
+      this.channel.appendLine(`[${new Date().toLocaleTimeString()}] ← invalid payload: ${body.slice(0, 120)}`);
     }
   }
 

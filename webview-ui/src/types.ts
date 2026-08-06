@@ -21,4 +21,5 @@ export type ServerMessage =
 export type ClientMessage =
   | { type: 'webviewReady' }
   | { type: 'focusAgent'; id: string }
-  | { type: 'closeAgent'; id: string };
+  | { type: 'closeAgent'; id: string }
+  | { type: 'installHooks' };

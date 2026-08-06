@@ -1,50 +1,78 @@
-import { drawCharacterSprite, drawFurniture, getPcFrame, loadSprites } from './sprites.js';
+import { drawCharacterSprite, getPcFrame, loadSprites } from './sprites.js';
 import type { ToolHistoryEntry, ToolStatus } from './types.js';
 
-export type CharacterActivity = 'idle' | 'walking' | 'typing' | 'reading' | 'waiting' | 'running' | 'searching';
+// ─── Constants ────────────────────────────────────────────────────────────────
 
-// Logical tile grid
 const TILE = 16;
-// All rendering is done at 2× via ctx.scale — keeps logical coords clean
 const RENDER_SCALE = 2;
-const CHAR_W = 16;   // source sprite width (logical)
-const CHAR_H = 32;   // source sprite height (logical)
+const CHAR_W = 16;
+const CHAR_H = 32;
 const MAX_HISTORY = 50;
 
-// Layout constants (in logical TILE units)
-const WALL_ROWS = 2;       // rows used by top wall
-const DESK_SPACING_X = 3;  // tiles between desk centres
-const DESK_SPACING_Y = 5;  // tiles between desk rows
+const WALL_ROWS = 2;
+const DESK_SPACING_X = 3;
+const DESK_SPACING_Y = 5;
 const DESK_START_COL = 1;
 const DESK_START_ROW = WALL_ROWS;
 
-// Dark wood floor palette
+// Idle leisure timings
+const IDLE_WANDER_MS = 10_000;      // after this long idle, consider leisure
+const LEISURE_MIN_MS = 15_000;      // minimum time at leisure spot
+const LEISURE_MAX_MS = 35_000;      // maximum time at leisure spot
+const LEISURE_CHANCE = 0.45;        // probability of picking leisure vs staying at desk
+
+// Floor palette
 const PLANK_PALETTES = [
   ['#2e1c0a', '#3a2410', '#2a180a', '#33200e'],
   ['#231409', '#2c1a0d', '#27170b', '#2a1a0c'],
 ];
 
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+export type CharacterActivity =
+  | 'idle' | 'walking' | 'typing' | 'reading' | 'waiting'
+  | 'running' | 'searching'
+  | 'gaming' | 'watching_tv' | 'coffee_break';
+
+export type LeisureType = 'gaming' | 'tv' | 'coffee';
+
 export interface Character {
   id: string;
   name: string;
-  x: number;
-  y: number;
-  targetX: number;
-  targetY: number;
-  deskX: number;
-  deskY: number;
+  x: number; y: number;
+  targetX: number; targetY: number;
+  deskX: number; deskY: number;
   activity: CharacterActivity;
   activeTools: Map<string, { name: string; status: ToolStatus }>;
   toolHistory: ToolHistoryEntry[];
   palette: number;
-  frame: number;
-  frameTimer: number;
+  frame: number; frameTimer: number;
   direction: 'left' | 'right' | 'up' | 'down';
-  inputTokens: number;
-  outputTokens: number;
+  inputTokens: number; outputTokens: number;
   sessionStartedAt: number;
   speechBubble?: { text: string; expiresAt: number };
   selected: boolean;
+  // Leisure system
+  idleGoal: LeisureType | 'desk' | null;
+  idleTimer: number;       // ms until next idle action
+  leisureTimer: number;    // ms remaining in leisure activity
+}
+
+interface Pet {
+  x: number; y: number;
+  targetX: number; targetY: number;
+  direction: 'left' | 'right';
+  frame: number; frameTimer: number;
+  isSitting: boolean;
+  sitTimer: number;    // ms until next sit/unsit toggle
+  color: 'orange' | 'gray';
+}
+
+interface LeisureSpot {
+  type: LeisureType;
+  itemX: number; itemY: number;
+  standX: number; standY: number;
+  occupant: string | null;
 }
 
 export interface Office {
@@ -53,12 +81,15 @@ export interface Office {
   characters: Map<string, Character>;
   animFrameId: number;
   lastTimestamp: number;
-  pcFrame: number;
-  pcFrameTimer: number;
-  cols: number;  // logical columns (canvas_width / TILE / RENDER_SCALE)
-  rows: number;
+  pcFrame: number; pcFrameTimer: number;
+  cols: number; rows: number;
   onCharacterClick?: (id: string) => void;
+  pet: Pet;
+  leisureSpots: LeisureSpot[];
+  elapsedTime: number;
 }
+
+// ─── Factory ──────────────────────────────────────────────────────────────────
 
 let nextPaletteIndex = 0;
 
@@ -66,26 +97,34 @@ export function createOffice(canvas: HTMLCanvasElement): Office {
   const ctx = canvas.getContext('2d')!;
   ctx.imageSmoothingEnabled = false;
 
+  const pet: Pet = {
+    x: 80, y: 80,
+    targetX: 80, targetY: 80,
+    direction: 'right',
+    frame: 0, frameTimer: 0,
+    isSitting: true,
+    sitTimer: 4000,
+    color: 'orange',
+  };
+
   const office: Office = {
-    canvas,
-    ctx,
+    canvas, ctx,
     characters: new Map(),
     animFrameId: 0,
     lastTimestamp: 0,
-    pcFrame: 0,
-    pcFrameTimer: 0,
-    cols: 9,
-    rows: 18,
+    pcFrame: 0, pcFrameTimer: 0,
+    cols: 9, rows: 18,
+    pet,
+    leisureSpots: [],
+    elapsedTime: 0,
   };
 
   canvas.addEventListener('click', (e) => {
     const rect = canvas.getBoundingClientRect();
     const scaleX = canvas.width / rect.width;
     const scaleY = canvas.height / rect.height;
-    // Divide by RENDER_SCALE to get logical coordinates
     const cx = (e.clientX - rect.left) * scaleX / RENDER_SCALE;
     const cy = (e.clientY - rect.top) * scaleY / RENDER_SCALE;
-
     let hit = false;
     for (const char of office.characters.values()) {
       if (cx >= char.x && cx <= char.x + CHAR_W && cy >= char.y && cy <= char.y + CHAR_H) {
@@ -106,6 +145,8 @@ export function createOffice(canvas: HTMLCanvasElement): Office {
   return office;
 }
 
+// ─── Resize & Layout ──────────────────────────────────────────────────────────
+
 export function resizeOffice(office: Office, cssWidth: number, cssHeight: number): void {
   const w = Math.max(Math.round(cssWidth), 64);
   const h = Math.max(Math.round(cssHeight), 64);
@@ -115,11 +156,60 @@ export function resizeOffice(office: Office, cssWidth: number, cssHeight: number
   office.canvas.height = h;
   office.canvas.getContext('2d')!.imageSmoothingEnabled = false;
 
-  // Logical grid: divide canvas pixels by RENDER_SCALE to get logical tile count
   office.cols = Math.max(2, Math.floor(w / TILE / RENDER_SCALE));
   office.rows = Math.max(2, Math.floor(h / TILE / RENDER_SCALE));
 
+  computeLeisureSpots(office);
   repositionDesks(office);
+
+  // Clamp pet into new bounds
+  const floorY = WALL_ROWS * TILE + TILE;
+  const maxX = (office.cols - 2) * TILE;
+  const maxY = (office.rows - 2) * TILE;
+  office.pet.x = Math.min(Math.max(office.pet.x, TILE), maxX);
+  office.pet.y = Math.min(Math.max(office.pet.y, floorY), maxY);
+}
+
+function computeLeisureSpots(office: Office): void {
+  const { cols, rows } = office;
+  const spots: LeisureSpot[] = [];
+
+  // Coffee machine: top-right, just below wall
+  if (cols >= 5) {
+    const cx = (cols - 2) * TILE;
+    const cy = WALL_ROWS * TILE;
+    spots.push({
+      type: 'coffee',
+      itemX: cx, itemY: cy,
+      standX: cx - TILE, standY: cy + TILE * 2,
+      occupant: null,
+    });
+  }
+
+  // Gaming setup: bottom-left corner
+  if (rows >= 10 && cols >= 6) {
+    const gY = (rows - 5) * TILE;
+    spots.push({
+      type: 'gaming',
+      itemX: 0, itemY: gY,
+      standX: TILE + 2, standY: gY + TILE,
+      occupant: null,
+    });
+  }
+
+  // TV + couch: bottom-right corner
+  if (rows >= 10 && cols >= 8) {
+    const tvX = (cols - 6) * TILE;
+    const tvY = (rows - 5) * TILE;
+    spots.push({
+      type: 'tv',
+      itemX: tvX, itemY: tvY,
+      standX: tvX + TILE * 2, standY: tvY + TILE,
+      occupant: null,
+    });
+  }
+
+  office.leisureSpots = spots;
 }
 
 function repositionDesks(office: Office): void {
@@ -128,49 +218,54 @@ function repositionDesks(office: Office): void {
     const { deskX, deskY } = deskPosition(office, idx);
     c.deskX = deskX;
     c.deskY = deskY;
-    c.targetX = deskX;
-    c.targetY = deskY + TILE;
+    if (c.idleGoal === 'desk' || c.idleGoal === null) {
+      c.targetX = deskX;
+      c.targetY = deskY + TILE;
+    }
     idx++;
   }
 }
 
 function deskPosition(office: Office, idx: number): { deskX: number; deskY: number } {
-  const desksPerRow = Math.max(1, Math.floor((office.cols - DESK_START_COL * 2) / DESK_SPACING_X));
-  const col = DESK_START_COL + (idx % desksPerRow) * DESK_SPACING_X;
+  // Keep desks away from the left column (plant) and right column (coffee)
+  const usableCols = Math.max(1, office.cols - 3);
+  const desksPerRow = Math.max(1, Math.floor(usableCols / DESK_SPACING_X));
+  const col = DESK_START_COL + 1 + (idx % desksPerRow) * DESK_SPACING_X;
   const row = DESK_START_ROW + Math.floor(idx / desksPerRow) * DESK_SPACING_Y;
   return { deskX: col * TILE, deskY: row * TILE };
 }
+
+// ─── Character management ─────────────────────────────────────────────────────
 
 export function addCharacter(office: Office, id: string, name: string): void {
   if (office.characters.has(id)) return;
   const idx = office.characters.size;
   const { deskX, deskY } = deskPosition(office, idx);
-
-  const char: Character = {
-    id,
-    name,
-    x: deskX,
-    y: deskY + TILE,
-    targetX: deskX,
-    targetY: deskY + TILE,
-    deskX,
-    deskY,
+  office.characters.set(id, {
+    id, name,
+    x: deskX, y: deskY + TILE,
+    targetX: deskX, targetY: deskY + TILE,
+    deskX, deskY,
     activity: 'idle',
     activeTools: new Map(),
     toolHistory: [],
     palette: nextPaletteIndex++ % 6,
-    frame: 0,
-    frameTimer: 0,
+    frame: 0, frameTimer: 0,
     direction: 'down',
-    inputTokens: 0,
-    outputTokens: 0,
+    inputTokens: 0, outputTokens: 0,
     sessionStartedAt: Date.now(),
     selected: false,
-  };
-  office.characters.set(id, char);
+    idleGoal: null,
+    idleTimer: IDLE_WANDER_MS * (0.5 + Math.random()),
+    leisureTimer: 0,
+  });
 }
 
 export function removeCharacter(office: Office, id: string): void {
+  // Free any leisure spot this character was using
+  for (const spot of office.leisureSpots) {
+    if (spot.occupant === id) spot.occupant = null;
+  }
   office.characters.delete(id);
   repositionDesks(office);
 }
@@ -180,12 +275,21 @@ export function onToolStart(
 ): void {
   const c = office.characters.get(agentId);
   if (!c) return;
+  // Snap back to desk immediately — no wandering while working
+  freeSpotsFor(office, agentId);
+  c.idleGoal = null;
+  c.x = c.deskX;
+  c.y = c.deskY + TILE;
+  c.targetX = c.deskX;
+  c.targetY = c.deskY + TILE;
   c.activeTools.set(toolId, { name: toolName, status });
   c.activity = toolStatusToActivity(status);
   c.direction = 'up';
   c.speechBubble = { text: shortToolName(toolName), expiresAt: Date.now() + 3500 };
   c.toolHistory.unshift({ toolId, toolName, status, startedAt: Date.now() });
   if (c.toolHistory.length > MAX_HISTORY) c.toolHistory.length = MAX_HISTORY;
+  // Reset idle timer so they don't immediately dash to leisure after work ends
+  c.idleTimer = IDLE_WANDER_MS * (1 + Math.random());
 }
 
 export function onToolDone(office: Office, agentId: string, toolId: string): void {
@@ -194,15 +298,22 @@ export function onToolDone(office: Office, agentId: string, toolId: string): voi
   const entry = c.toolHistory.find((e) => e.toolId === toolId && !e.finishedAt);
   if (entry) entry.finishedAt = Date.now();
   c.activeTools.delete(toolId);
-  if (c.activeTools.size === 0) { c.activity = 'idle'; c.direction = 'down'; }
-  else { c.activity = toolStatusToActivity([...c.activeTools.values()][0].status); }
+  if (c.activeTools.size === 0) {
+    c.activity = 'idle';
+    c.direction = 'down';
+    c.idleTimer = IDLE_WANDER_MS * (0.5 + Math.random());
+  } else {
+    c.activity = toolStatusToActivity([...c.activeTools.values()][0].status);
+  }
 }
 
 export function setWaiting(office: Office, agentId: string): void {
   const c = office.characters.get(agentId);
   if (!c) return;
+  freeSpotsFor(office, agentId);
   c.activity = 'waiting';
   c.direction = 'down';
+  c.idleGoal = null;
   c.speechBubble = { text: '?', expiresAt: Date.now() + 15000 };
 }
 
@@ -211,7 +322,10 @@ export function setIdle(office: Office, agentId: string): void {
   if (!c) return;
   c.activity = 'idle';
   c.direction = 'down';
+  c.idleTimer = IDLE_WANDER_MS * (0.5 + Math.random());
 }
+
+// ─── Loop ─────────────────────────────────────────────────────────────────────
 
 export function startLoop(office: Office): void {
   function tick(ts: number) {
@@ -231,43 +345,183 @@ export function stopLoop(office: Office): void {
 // ─── Update ───────────────────────────────────────────────────────────────────
 
 function update(office: Office, dt: number): void {
-  office.pcFrameTimer += dt;
-  if (office.pcFrameTimer >= 400) { office.pcFrameTimer = 0; office.pcFrame = (office.pcFrame + 1) % 3; }
+  office.elapsedTime += dt;
 
-  // Max walkable area (logical)
+  // PC animation
+  office.pcFrameTimer += dt;
+  if (office.pcFrameTimer >= 400) {
+    office.pcFrameTimer = 0;
+    office.pcFrame = (office.pcFrame + 1) % 3;
+  }
+
+  updatePet(office, dt);
+
   const maxX = Math.max(0, (office.cols - 2) * TILE);
   const maxY = Math.max(0, (office.rows - 3) * TILE);
   const floorStartY = WALL_ROWS * TILE;
 
   for (const c of office.characters.values()) {
-    c.frameTimer += dt;
-    const fps = c.activity === 'idle' ? 3 : 8;
-    if (c.frameTimer >= 1000 / fps) { c.frameTimer = 0; c.frame = (c.frame + 1) % 4; }
+    updateCharacterAnimation(c, dt);
+    updateCharacterMovement(c, dt, maxX, maxY);
 
-    if (c.activity === 'walking') {
-      const speed = 55 * (dt / 1000);
-      const dx = c.targetX - c.x;
-      const dy = c.targetY - c.y;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      if (dist < speed) {
-        c.x = c.targetX; c.y = c.targetY;
-        c.activity = 'idle'; c.direction = 'down';
-      } else {
-        c.x += (dx / dist) * speed;
-        c.y += (dy / dist) * speed;
-        c.direction = Math.abs(dx) > Math.abs(dy)
-          ? (dx > 0 ? 'right' : 'left')
-          : (dy > 0 ? 'down' : 'up');
-      }
-    }
-
-    if (c.activity === 'idle' && Math.random() < 0.0005) {
-      c.targetX = TILE + Math.floor(Math.random() * maxX);
-      c.targetY = floorStartY + Math.floor(Math.random() * (maxY - floorStartY));
-      c.activity = 'walking';
+    // Only run idle behavior when character has no work
+    if (c.activeTools.size === 0 && c.activity !== 'waiting') {
+      updateIdleBehavior(office, c, dt, maxX, maxY, floorStartY);
     }
 
     if (c.speechBubble && Date.now() > c.speechBubble.expiresAt) c.speechBubble = undefined;
+  }
+}
+
+function updateCharacterAnimation(c: Character, dt: number): void {
+  c.frameTimer += dt;
+  const fps = c.activity === 'idle' ? 3 : 8;
+  if (c.frameTimer >= 1000 / fps) {
+    c.frameTimer = 0;
+    c.frame = (c.frame + 1) % 4;
+  }
+}
+
+function updateCharacterMovement(c: Character, dt: number, maxX: number, maxY: number): void {
+  if (c.activity !== 'walking') return;
+  const speed = 55 * (dt / 1000);
+  const dx = c.targetX - c.x;
+  const dy = c.targetY - c.y;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+  if (dist < speed) {
+    c.x = c.targetX;
+    c.y = c.targetY;
+    // Arrived — resolve pending goal
+    if (c.idleGoal === 'desk' || c.idleGoal === null) {
+      c.activity = 'idle';
+      c.direction = 'down';
+    } else if (c.idleGoal) {
+      c.activity = goalToActivity(c.idleGoal);
+      c.direction = 'down';
+      c.speechBubble = { text: goalBubble(c.idleGoal), expiresAt: Date.now() + c.leisureTimer };
+    }
+    void maxX; void maxY;
+  } else {
+    c.x += (dx / dist) * speed;
+    c.y += (dy / dist) * speed;
+    c.direction = Math.abs(dx) > Math.abs(dy)
+      ? (dx > 0 ? 'right' : 'left')
+      : (dy > 0 ? 'down' : 'up');
+  }
+}
+
+function updateIdleBehavior(
+  office: Office, c: Character, dt: number,
+  maxX: number, maxY: number, floorStartY: number,
+): void {
+  // Countdown idle timer
+  if (c.idleTimer > 0) {
+    c.idleTimer -= dt;
+  }
+
+  // If doing leisure, count down leisure timer
+  if (c.idleGoal && c.idleGoal !== 'desk' && c.activity !== 'walking') {
+    c.leisureTimer -= dt;
+    if (c.leisureTimer <= 0) {
+      // Done — go back to desk
+      freeSpotsFor(office, c.id);
+      c.idleGoal = 'desk';
+      c.activity = 'walking';
+      c.targetX = c.deskX;
+      c.targetY = c.deskY + TILE;
+      c.speechBubble = undefined;
+      c.idleTimer = IDLE_WANDER_MS * (0.5 + Math.random());
+    }
+    return;
+  }
+
+  // Don't trigger if already moving or in leisure
+  if (c.activity === 'walking') return;
+  if (c.idleGoal && c.idleGoal !== 'desk') return;
+
+  // Random idle wander at desk
+  if (c.activity === 'idle' && c.idleGoal === null && Math.random() < 0.0003) {
+    const wx = TILE + Math.floor(Math.random() * maxX);
+    const wy = floorStartY + TILE + Math.floor(Math.random() * Math.max(1, maxY - floorStartY));
+    c.targetX = wx;
+    c.targetY = wy;
+    c.activity = 'walking';
+    return;
+  }
+
+  // When idle timer expires, consider leisure
+  if (c.idleTimer <= 0 && c.activity === 'idle') {
+    if (Math.random() < LEISURE_CHANCE && office.leisureSpots.length > 0) {
+      // Pick an available leisure spot
+      const available = office.leisureSpots.filter((s) => s.occupant === null);
+      if (available.length > 0) {
+        const spot = available[Math.floor(Math.random() * available.length)];
+        spot.occupant = c.id;
+        c.idleGoal = spot.type;
+        c.leisureTimer = LEISURE_MIN_MS + Math.random() * (LEISURE_MAX_MS - LEISURE_MIN_MS);
+        c.targetX = spot.standX;
+        c.targetY = spot.standY;
+        c.activity = 'walking';
+        return;
+      }
+    }
+    // Reset timer even if we didn't go anywhere
+    c.idleTimer = IDLE_WANDER_MS * (0.5 + Math.random());
+  }
+
+  void maxX; void maxY;
+}
+
+function freeSpotsFor(office: Office, agentId: string): void {
+  for (const spot of office.leisureSpots) {
+    if (spot.occupant === agentId) spot.occupant = null;
+  }
+}
+
+function updatePet(office: Office, dt: number): void {
+  const pet = office.pet;
+  const floorY = WALL_ROWS * TILE + TILE;
+  const maxX = Math.max(TILE, (office.cols - 3) * TILE);
+  const maxY = Math.max(floorY + TILE, (office.rows - 2) * TILE);
+
+  // Frame animation
+  pet.frameTimer += dt;
+  const fps = pet.isSitting ? 1 : 5;
+  if (pet.frameTimer >= 1000 / fps) {
+    pet.frameTimer = 0;
+    pet.frame = (pet.frame + 1) % 2;
+  }
+
+  // Sit/stand timer
+  pet.sitTimer -= dt;
+  if (pet.sitTimer <= 0) {
+    pet.isSitting = !pet.isSitting;
+    pet.sitTimer = pet.isSitting
+      ? 3000 + Math.random() * 5000    // sit for 3-8s
+      : 2000 + Math.random() * 4000;   // walk for 2-6s
+    if (!pet.isSitting) {
+      // Pick new target
+      pet.targetX = Math.max(TILE, Math.min(maxX, TILE + Math.floor(Math.random() * maxX)));
+      pet.targetY = Math.max(floorY, Math.min(maxY, floorY + Math.floor(Math.random() * (maxY - floorY))));
+    }
+  }
+
+  // Move if walking
+  if (!pet.isSitting) {
+    const speed = 35 * (dt / 1000);
+    const dx = pet.targetX - pet.x;
+    const dy = pet.targetY - pet.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist < speed) {
+      pet.x = pet.targetX;
+      pet.y = pet.targetY;
+      pet.isSitting = true;
+      pet.sitTimer = 2000 + Math.random() * 4000;
+    } else {
+      pet.x += (dx / dist) * speed;
+      pet.y += (dy / dist) * speed;
+      pet.direction = dx >= 0 ? 'right' : 'left';
+    }
   }
 }
 
@@ -281,7 +535,6 @@ function render(office: Office): void {
   ctx.clearRect(0, 0, W, H);
   ctx.imageSmoothingEnabled = false;
 
-  // All drawing is done in logical coords; ctx.scale(2,2) maps to canvas pixels
   ctx.save();
   ctx.scale(RENDER_SCALE, RENDER_SCALE);
 
@@ -289,257 +542,910 @@ function render(office: Office): void {
   drawWalls(ctx, office);
   drawBaseboardShadow(ctx, office);
 
-  const sorted = [...characters.values()].sort((a, b) => a.deskY - b.deskY);
-  for (const c of sorted) drawWorkstation(ctx, c, office.pcFrame);
+  // Room decorations (behind characters)
+  drawRoomDecorations(ctx, office);
 
+  // Workstations
+  const sorted = [...characters.values()].sort((a, b) => a.deskY - b.deskY);
+  for (const c of sorted) drawWorkstation(ctx, c, office.pcFrame, office.elapsedTime);
+
+  // Pet (below characters in y-order if possible)
+  drawCat(ctx, office.pet, office.elapsedTime);
+
+  // Characters
   const sortedByY = [...characters.values()].sort((a, b) => a.y - b.y);
-  for (const c of sortedByY) drawCharacter(ctx, c);
+  for (const c of sortedByY) drawCharacter(ctx, c, office);
 
   ctx.restore();
-
-  // Empty state overlay (in canvas pixels, not scaled)
-  if (characters.size === 0) {
-    ctx.fillStyle = 'rgba(0,0,0,0.55)';
-    ctx.fillRect(0, 0, W, H);
-    ctx.fillStyle = '#89b4fa';
-    ctx.font = `bold ${Math.max(10, Math.floor(W / 22))}px monospace`;
-    ctx.textAlign = 'center';
-    ctx.fillText('No active agents', W / 2, H / 2 - 12);
-    ctx.fillStyle = '#6c7086';
-    ctx.font = `${Math.max(8, Math.floor(W / 30))}px monospace`;
-    ctx.fillText('Install Hooks → start your agent', W / 2, H / 2 + 8);
-    ctx.textAlign = 'left';
-  }
 }
 
-// ─── Floor (dark wood planks) ─────────────────────────────────────────────────
+// ─── Floor ────────────────────────────────────────────────────────────────────
 
 function drawFloor(ctx: CanvasRenderingContext2D, office: Office): void {
   const LW = office.cols * TILE;
-
   for (let row = WALL_ROWS; row < office.rows; row++) {
     const y = row * TILE;
     const palette = PLANK_PALETTES[Math.floor(row / 2) % 2];
-
     ctx.fillStyle = palette[row % palette.length];
     ctx.fillRect(0, y, LW, TILE - 1);
-
-    // Plank edge (dark line between planks)
     ctx.fillStyle = '#1a0d04';
     ctx.fillRect(0, y + TILE - 1, LW, 1);
-
-    // Vertical joints (staggered between rows)
     const offset = (row % 2) * TILE * 2;
     ctx.fillStyle = 'rgba(0,0,0,0.3)';
     for (let jx = offset; jx < LW + TILE * 4; jx += TILE * 4) {
       ctx.fillRect(jx, y, 1, TILE - 1);
     }
-
-    // Subtle highlight (grain shimmer)
     ctx.fillStyle = 'rgba(255,190,100,0.04)';
     ctx.fillRect(0, y + 1, LW, 2);
   }
 }
 
-// ─── Walls (top office wall with windows) ────────────────────────────────────
+// ─── Walls ────────────────────────────────────────────────────────────────────
 
 function drawWalls(ctx: CanvasRenderingContext2D, office: Office): void {
   const LW = office.cols * TILE;
   const wallH = WALL_ROWS * TILE;
 
-  // Wall background
   ctx.fillStyle = '#1e2d3e';
   ctx.fillRect(0, 0, LW, wallH);
 
-  // Subtle texture lines
   for (let y = 0; y < wallH; y += 5) {
     ctx.fillStyle = y % 10 === 0 ? 'rgba(0,0,0,0.18)' : 'rgba(255,255,255,0.025)';
     ctx.fillRect(0, y, LW, 1);
   }
 
-  // Crown moulding
   ctx.fillStyle = '#152230';
   ctx.fillRect(0, 0, LW, 2);
+
+  // Startup logo on wall (centered)
+  const logoX = Math.floor(LW / 2) - 12;
+  const logoY = 4;
+  ctx.fillStyle = 'rgba(100,200,255,0.15)';
+  ctx.fillRect(logoX, logoY, 24, 10);
+  ctx.fillStyle = 'rgba(100,200,255,0.4)';
+  ctx.fillRect(logoX + 2, logoY + 2, 20, 6);
+  ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  ctx.font = '5px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('DEV CO.', Math.floor(LW / 2), logoY + 8);
+  ctx.textAlign = 'left';
 
   // Windows
   const winW = 24;
   const winH = wallH - 10;
   for (let wx = 10; wx + winW + 10 <= LW; wx += 44) {
-    // Shadow behind frame
     ctx.fillStyle = '#131e28';
     ctx.fillRect(wx - 1, 3, winW + 2, winH + 4);
-    // Frame
     ctx.fillStyle = '#3a5678';
     ctx.fillRect(wx, 4, winW, winH);
-    // Lower sky pane
     ctx.fillStyle = '#4a7298';
     ctx.fillRect(wx + 2, 6, winW - 4, winH - 2);
-    // Lighter upper sky
     ctx.fillStyle = '#5a8aad';
     ctx.fillRect(wx + 2, 6, winW - 4, Math.floor((winH - 2) / 2));
-    // Glass sheen
     ctx.fillStyle = 'rgba(200,235,255,0.15)';
     ctx.fillRect(wx + 3, 7, 4, winH - 4);
-    // Cross bar (horizontal)
     ctx.fillStyle = '#3a5678';
     ctx.fillRect(wx, 4 + Math.floor(winH / 2), winW, 2);
-    // Cross bar (vertical)
     ctx.fillRect(wx + Math.floor(winW / 2) - 1, 4, 2, winH);
   }
 }
 
-// ─── Baseboard ────────────────────────────────────────────────────────────────
-
 function drawBaseboardShadow(ctx: CanvasRenderingContext2D, office: Office): void {
   const LW = office.cols * TILE;
   const baseY = WALL_ROWS * TILE;
-
   ctx.fillStyle = '#5c3d1a';
   ctx.fillRect(0, baseY, LW, 4);
   ctx.fillStyle = '#7a5228';
   ctx.fillRect(0, baseY, LW, 2);
-  // Shadow below baseboard
   ctx.fillStyle = 'rgba(0,0,0,0.35)';
   ctx.fillRect(0, baseY + 4, LW, 4);
 }
 
+// ─── Room Decorations ─────────────────────────────────────────────────────────
+
+function drawRoomDecorations(ctx: CanvasRenderingContext2D, office: Office): void {
+  const { cols, rows } = office;
+  const baseY = WALL_ROWS * TILE;
+
+  // Tall plant — always at top-left below wall
+  drawPlantTall(ctx, 0, baseY);
+
+  // Coffee machine — always at top-right if there's room
+  if (cols >= 5) {
+    const cmX = (cols - 2) * TILE;
+    drawCoffeeMachine(ctx, cmX, baseY, office.elapsedTime);
+    // Small plant next to it
+    if (cols >= 6) drawPlantSmall(ctx, (cols - 1) * TILE, baseY + TILE * 2);
+  }
+
+  // Bookshelf along left wall
+  if (rows >= 8) {
+    drawBookshelf(ctx, 0, (WALL_ROWS + 3) * TILE);
+  }
+
+  // Gaming setup — bottom-left
+  if (rows >= 10 && cols >= 6) {
+    const gY = (rows - 5) * TILE;
+    const spot = office.leisureSpots.find((s) => s.type === 'gaming');
+    const active = spot?.occupant !== null;
+    drawGamingSetup(ctx, 0, gY, active, office.elapsedTime);
+  }
+
+  // TV + couch — bottom-right
+  if (rows >= 10 && cols >= 8) {
+    const tvX = (cols - 6) * TILE;
+    const tvY = (rows - 5) * TILE;
+    const spot = office.leisureSpots.find((s) => s.type === 'tv');
+    const active = spot?.occupant !== null;
+    drawCouchTV(ctx, tvX, tvY, active, office.elapsedTime);
+  }
+
+  // Area rug in the center (decorative)
+  if (cols >= 8 && rows >= 12) {
+    const rugX = Math.floor(cols / 2) * TILE - TILE * 2;
+    const rugY = Math.floor(rows / 2) * TILE;
+    drawAreaRug(ctx, rugX, rugY);
+  }
+}
+
+// ─── Tall Plant ───────────────────────────────────────────────────────────────
+
+function drawPlantTall(ctx: CanvasRenderingContext2D, x: number, y: number): void {
+  // Pot
+  ctx.fillStyle = '#6b3a2a';
+  ctx.fillRect(x + 2, y + 16, 10, 8);
+  ctx.fillStyle = '#8b4a36';
+  ctx.fillRect(x + 1, y + 14, 12, 3);
+  // Soil
+  ctx.fillStyle = '#2a1a0a';
+  ctx.fillRect(x + 2, y + 14, 10, 2);
+  // Main stem
+  ctx.fillStyle = '#2d5a1e';
+  ctx.fillRect(x + 6, y + 4, 2, 12);
+  // Leaves — layered for depth
+  const leafColors = ['#1a4a0e', '#2d7a1e', '#3a9628', '#4ab332'];
+  // Left leaves
+  ctx.fillStyle = leafColors[0];
+  ctx.fillRect(x, y + 2, 6, 4);
+  ctx.fillRect(x + 1, y, 5, 3);
+  ctx.fillStyle = leafColors[1];
+  ctx.fillRect(x + 1, y + 2, 5, 3);
+  ctx.fillStyle = leafColors[2];
+  ctx.fillRect(x + 2, y + 1, 4, 3);
+  // Right leaves
+  ctx.fillStyle = leafColors[0];
+  ctx.fillRect(x + 8, y + 4, 6, 4);
+  ctx.fillRect(x + 8, y + 6, 5, 3);
+  ctx.fillStyle = leafColors[1];
+  ctx.fillRect(x + 8, y + 5, 5, 3);
+  ctx.fillStyle = leafColors[2];
+  ctx.fillRect(x + 9, y + 4, 4, 3);
+  // Center leaves (front)
+  ctx.fillStyle = leafColors[2];
+  ctx.fillRect(x + 4, y, 6, 4);
+  ctx.fillStyle = leafColors[3];
+  ctx.fillRect(x + 5, y, 4, 3);
+  // Highlight on leaves
+  ctx.fillStyle = 'rgba(255,255,200,0.12)';
+  ctx.fillRect(x + 5, y + 1, 2, 1);
+}
+
+// ─── Small Plant (Succulent) ──────────────────────────────────────────────────
+
+function drawPlantSmall(ctx: CanvasRenderingContext2D, x: number, y: number): void {
+  // Tiny pot
+  ctx.fillStyle = '#6b3a2a';
+  ctx.fillRect(x + 2, y + 5, 8, 5);
+  ctx.fillStyle = '#8b4a36';
+  ctx.fillRect(x + 1, y + 4, 10, 2);
+  ctx.fillStyle = '#2a1a0a';
+  ctx.fillRect(x + 2, y + 4, 8, 1);
+  // Succulent leaves - rosette pattern
+  ctx.fillStyle = '#2d7a4a';
+  ctx.fillRect(x + 4, y + 1, 4, 4);
+  ctx.fillStyle = '#3a9a60';
+  ctx.fillRect(x + 3, y + 2, 3, 3);
+  ctx.fillRect(x + 6, y + 2, 3, 3);
+  ctx.fillRect(x + 4, y, 4, 3);
+  ctx.fillStyle = '#5ab878';
+  ctx.fillRect(x + 4, y + 1, 2, 2);
+  ctx.fillRect(x + 5, y, 2, 2);
+  // Highlight
+  ctx.fillStyle = 'rgba(200,255,220,0.25)';
+  ctx.fillRect(x + 4, y + 1, 1, 1);
+}
+
+// ─── Coffee Machine ───────────────────────────────────────────────────────────
+
+function drawCoffeeMachine(ctx: CanvasRenderingContext2D, x: number, y: number, t: number): void {
+  // Body
+  ctx.fillStyle = '#2a2a3a';
+  ctx.fillRect(x, y + 2, 12, 18);
+  ctx.fillStyle = '#3a3a4e';
+  ctx.fillRect(x + 1, y + 2, 10, 16);
+  // Top panel
+  ctx.fillStyle = '#1e1e2c';
+  ctx.fillRect(x, y, 12, 4);
+  ctx.fillStyle = '#2e2e40';
+  ctx.fillRect(x + 1, y + 1, 10, 2);
+  // Screen
+  ctx.fillStyle = '#00aa33';
+  ctx.fillRect(x + 2, y + 4, 5, 4);
+  ctx.fillStyle = '#00dd44';
+  ctx.fillRect(x + 2, y + 4, 4, 3);
+  // Pixel "88" on screen
+  ctx.fillStyle = '#00ff55';
+  ctx.fillRect(x + 3, y + 5, 1, 2);
+  ctx.fillRect(x + 5, y + 5, 1, 2);
+  // Buttons
+  ctx.fillStyle = '#cc3300';
+  ctx.fillRect(x + 9, y + 4, 2, 2);
+  ctx.fillStyle = '#ff6600';
+  ctx.fillRect(x + 9, y + 7, 2, 2);
+  ctx.fillStyle = '#0066cc';
+  ctx.fillRect(x + 9, y + 10, 2, 2);
+  // Dispensing spout
+  ctx.fillStyle = '#1a1a28';
+  ctx.fillRect(x + 3, y + 12, 6, 2);
+  ctx.fillStyle = '#555566';
+  ctx.fillRect(x + 4, y + 14, 4, 2);
+  // Cup tray
+  ctx.fillStyle = '#4a4a5a';
+  ctx.fillRect(x + 1, y + 16, 10, 2);
+  ctx.fillStyle = '#3a3a48';
+  ctx.fillRect(x + 2, y + 16, 8, 1);
+  // Cup (when idle or being used)
+  ctx.fillStyle = '#eeeecc';
+  ctx.fillRect(x + 4, y + 14, 4, 3);
+  ctx.fillStyle = '#cc8833';
+  ctx.fillRect(x + 4, y + 14, 4, 1);
+  // Steam animation (bubbles rising)
+  const steamPhase = (t / 600) % 1;
+  for (let i = 0; i < 3; i++) {
+    const phase = (steamPhase + i * 0.33) % 1;
+    const sy = y + 10 - Math.floor(phase * 8);
+    const sx = x + 4 + (i % 2 === 0 ? 0 : 2);
+    const alpha = 1 - phase;
+    ctx.fillStyle = `rgba(220,220,255,${alpha * 0.6})`;
+    if (sy < y + 2) continue;
+    ctx.fillRect(sx, sy, 1, 1);
+  }
+  // Brand label
+  ctx.fillStyle = 'rgba(255,255,255,0.35)';
+  ctx.font = '4px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('☕', x + 6, y + 23);
+  ctx.textAlign = 'left';
+}
+
+// ─── Bookshelf ────────────────────────────────────────────────────────────────
+
+function drawBookshelf(ctx: CanvasRenderingContext2D, x: number, y: number): void {
+  // Shelf body
+  ctx.fillStyle = '#5c3822';
+  ctx.fillRect(x, y, 14, 20);
+  ctx.fillStyle = '#6e4a2e';
+  ctx.fillRect(x + 1, y + 1, 12, 18);
+  // Shelf boards
+  ctx.fillStyle = '#5c3822';
+  ctx.fillRect(x, y + 9, 14, 2);
+  // Books — top shelf
+  const books1 = ['#e63946', '#457b9d', '#2a9d8f', '#e9c46a', '#f4a261'];
+  for (let i = 0; i < 5; i++) {
+    ctx.fillStyle = books1[i % books1.length];
+    ctx.fillRect(x + 2 + i * 2, y + 2, 2, 7);
+    // Spine highlight
+    ctx.fillStyle = 'rgba(255,255,255,0.2)';
+    ctx.fillRect(x + 2 + i * 2, y + 2, 1, 5);
+  }
+  // Books — bottom shelf
+  const books2 = ['#6d6875', '#b5838d', '#e5989b', '#ffb4a2', '#ffcdb2'];
+  for (let i = 0; i < 4; i++) {
+    ctx.fillStyle = books2[i % books2.length];
+    ctx.fillRect(x + 2 + i * 2 + 1, y + 11, 2, 7);
+    ctx.fillStyle = 'rgba(255,255,255,0.2)';
+    ctx.fillRect(x + 2 + i * 2 + 1, y + 11, 1, 5);
+  }
+  // Small figurine on top
+  ctx.fillStyle = '#ffd700';
+  ctx.fillRect(x + 11, y - 3, 2, 4);
+  ctx.fillStyle = '#ffaa00';
+  ctx.fillRect(x + 11, y - 3, 2, 2);
+}
+
+// ─── Gaming Setup ─────────────────────────────────────────────────────────────
+
+function drawGamingSetup(
+  ctx: CanvasRenderingContext2D, x: number, y: number, active: boolean, t: number,
+): void {
+  // Floor mat / rug
+  ctx.fillStyle = '#2a1a3a';
+  ctx.fillRect(x, y + TILE, 28, 12);
+  ctx.fillStyle = '#3a2850';
+  ctx.fillRect(x + 1, y + TILE + 1, 26, 10);
+
+  // Bean bag chair
+  ctx.fillStyle = '#8b0000';
+  ctx.fillRect(x + 2, y + TILE + 2, 14, 10);
+  ctx.fillStyle = '#cc1111';
+  ctx.fillRect(x + 3, y + TILE + 2, 12, 8);
+  ctx.fillStyle = '#dd3333';
+  ctx.fillRect(x + 5, y + TILE + 2, 8, 5);
+  // Highlight
+  ctx.fillStyle = 'rgba(255,255,255,0.15)';
+  ctx.fillRect(x + 6, y + TILE + 3, 4, 2);
+
+  // TV stand
+  ctx.fillStyle = '#1e1e1e';
+  ctx.fillRect(x + 18, y + TILE + 4, 2, 8);
+  ctx.fillStyle = '#333';
+  ctx.fillRect(x + 16, y + TILE + 10, 6, 2);
+
+  // TV screen
+  const screenGlow = active ? '#1a0a3a' : '#0a0a0e';
+  ctx.fillStyle = screenGlow;
+  ctx.fillRect(x + 14, y, 14, 12);
+  ctx.fillStyle = active ? '#2a1a5a' : '#111';
+  ctx.fillRect(x + 15, y + 1, 12, 10);
+
+  if (active) {
+    // Game screen glow — blue/purple
+    const gPhase = Math.sin(t / 200) * 0.5 + 0.5;
+    ctx.fillStyle = `rgba(80,40,180,${0.3 + gPhase * 0.2})`;
+    ctx.fillRect(x + 15, y + 1, 12, 10);
+    // Pixel "game" elements on screen
+    ctx.fillStyle = '#ff4444';
+    ctx.fillRect(x + 17, y + 3, 3, 3);
+    ctx.fillStyle = '#44ff44';
+    ctx.fillRect(x + 22, y + 6, 3, 3);
+    ctx.fillStyle = '#4444ff';
+    ctx.fillRect(x + 19, y + 7, 2, 2);
+    // Score text
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '4px monospace';
+    ctx.fillText('42', x + 16, y + 3);
+  } else {
+    ctx.fillStyle = '#1a1a2e';
+    ctx.fillRect(x + 17, y + 3, 8, 6);
+    ctx.fillStyle = '#333355';
+    ctx.fillText('PAUSED', x + 15, y + 9);
+  }
+
+  // Game console
+  ctx.fillStyle = '#111122';
+  ctx.fillRect(x + 15, y + 12, 10, 5);
+  ctx.fillStyle = '#222233';
+  ctx.fillRect(x + 16, y + 12, 8, 4);
+  ctx.fillStyle = active ? '#00ff88' : '#004422';
+  ctx.fillRect(x + 16, y + 13, 2, 2);
+
+  // Controller (on floor or in hand)
+  ctx.fillStyle = '#2a2a3a';
+  ctx.fillRect(x + 4, y + TILE + 8, 8, 3);
+  ctx.fillStyle = '#3a3a4a';
+  ctx.fillRect(x + 5, y + TILE + 8, 6, 2);
+  // D-pad
+  ctx.fillStyle = '#555';
+  ctx.fillRect(x + 5, y + TILE + 9, 1, 1);
+  ctx.fillRect(x + 7, y + TILE + 9, 1, 1);
+  // Buttons
+  ctx.fillStyle = active ? '#ff4444' : '#663333';
+  ctx.fillRect(x + 9, y + TILE + 9, 1, 1);
+  ctx.fillStyle = active ? '#4444ff' : '#333366';
+  ctx.fillRect(x + 10, y + TILE + 9, 1, 1);
+
+  // Label
+  ctx.fillStyle = 'rgba(255,255,255,0.3)';
+  ctx.font = '4px monospace';
+  ctx.fillText('GAME', x + 15, y + 22);
+}
+
+// ─── TV + Couch ───────────────────────────────────────────────────────────────
+
+function drawCouchTV(
+  ctx: CanvasRenderingContext2D, x: number, y: number, active: boolean, t: number,
+): void {
+  // Area rug
+  ctx.fillStyle = '#3a2a1a';
+  ctx.fillRect(x, y + TILE, 36, 14);
+  ctx.fillStyle = '#4a3525';
+  ctx.fillRect(x + 1, y + TILE + 1, 34, 12);
+  // Rug pattern
+  ctx.fillStyle = '#5a4535';
+  for (let i = 0; i < 4; i++) {
+    ctx.fillRect(x + 4 + i * 8, y + TILE + 4, 4, 4);
+  }
+
+  // Couch — main body
+  ctx.fillStyle = '#4a5568';
+  ctx.fillRect(x, y + TILE + 4, 34, 10);
+  ctx.fillStyle = '#5a6678';
+  ctx.fillRect(x + 1, y + TILE + 4, 32, 8);
+  // Cushions
+  ctx.fillStyle = '#6a7688';
+  ctx.fillRect(x + 2, y + TILE + 5, 14, 6);
+  ctx.fillRect(x + 18, y + TILE + 5, 14, 6);
+  // Cushion highlights
+  ctx.fillStyle = 'rgba(255,255,255,0.1)';
+  ctx.fillRect(x + 3, y + TILE + 5, 8, 2);
+  ctx.fillRect(x + 19, y + TILE + 5, 8, 2);
+  // Armrests
+  ctx.fillStyle = '#4a5568';
+  ctx.fillRect(x, y + TILE + 3, 3, 11);
+  ctx.fillRect(x + 31, y + TILE + 3, 3, 11);
+  ctx.fillStyle = '#5a6678';
+  ctx.fillRect(x, y + TILE + 3, 3, 2);
+  ctx.fillRect(x + 31, y + TILE + 3, 3, 2);
+  // Couch legs
+  ctx.fillStyle = '#3a2a1a';
+  ctx.fillRect(x + 2, y + TILE + 13, 3, 2);
+  ctx.fillRect(x + 29, y + TILE + 13, 3, 2);
+
+  // TV unit — against the wall
+  ctx.fillStyle = '#1a1a22';
+  ctx.fillRect(x + 6, y - 2, 22, 16);
+  // Screen bezel
+  ctx.fillStyle = active ? '#0d1520' : '#0a0a0e';
+  ctx.fillRect(x + 7, y - 1, 20, 14);
+
+  if (active) {
+    // Show content on TV
+    const ch = Math.floor(t / 8000) % 3;
+    if (ch === 0) {
+      // Nature documentary (green)
+      ctx.fillStyle = '#1a4a1a';
+      ctx.fillRect(x + 8, y, 18, 12);
+      ctx.fillStyle = '#2a7a2a';
+      ctx.fillRect(x + 8, y + 7, 18, 5);
+      ctx.fillStyle = '#3aaa3a';
+      for (let i = 0; i < 5; i++) ctx.fillRect(x + 9 + i * 3, y + 4, 2, 4);
+      ctx.fillStyle = '#88dd55';
+      ctx.fillRect(x + 10, y + 3, 4, 3);
+    } else if (ch === 1) {
+      // News / code (blue/white)
+      ctx.fillStyle = '#0a1a3a';
+      ctx.fillRect(x + 8, y, 18, 12);
+      ctx.fillStyle = '#1a3a7a';
+      ctx.fillRect(x + 8, y, 18, 3);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '3px monospace';
+      ctx.fillText('BREAKING', x + 9, y + 2);
+      ctx.fillStyle = '#aaaaff';
+      for (let i = 0; i < 3; i++) {
+        ctx.fillRect(x + 9, y + 4 + i * 3, 14, 1);
+      }
+    } else {
+      // Code editor (startup appropriate)
+      ctx.fillStyle = '#1e1e2e';
+      ctx.fillRect(x + 8, y, 18, 12);
+      const codeColors = ['#cba6f7', '#89b4fa', '#a6e3a1', '#f38ba8'];
+      for (let i = 0; i < 4; i++) {
+        ctx.fillStyle = codeColors[i % codeColors.length];
+        const w2 = 4 + Math.floor(Math.random() * 8);
+        ctx.fillRect(x + 9 + (i % 2) * 5, y + 2 + i * 3, w2, 1);
+      }
+    }
+    // Screen glow on couch
+    const glow = Math.sin(t / 1500) * 0.05 + 0.08;
+    ctx.fillStyle = `rgba(100,150,255,${glow})`;
+    ctx.fillRect(x + 1, y + TILE + 4, 32, 8);
+  } else {
+    ctx.fillStyle = '#0a0a14';
+    ctx.fillRect(x + 8, y, 18, 12);
+    ctx.fillStyle = '#1a1a2e';
+    ctx.font = '4px monospace';
+    ctx.fillText('NETFLIX', x + 10, y + 8);
+  }
+
+  // TV stand
+  ctx.fillStyle = '#2a2a32';
+  ctx.fillRect(x + 15, y + 14, 4, 3);
+  ctx.fillStyle = '#3a3a42';
+  ctx.fillRect(x + 13, y + 16, 8, 2);
+
+  // Remote on armrest
+  ctx.fillStyle = '#2a2a3a';
+  ctx.fillRect(x + 28, y + TILE + 5, 4, 7);
+  ctx.fillStyle = '#ff4444';
+  ctx.fillRect(x + 29, y + TILE + 6, 1, 1);
+  ctx.fillStyle = '#4444ff';
+  ctx.fillRect(x + 31, y + TILE + 6, 1, 1);
+}
+
+// ─── Area Rug ────────────────────────────────────────────────────────────────
+
+function drawAreaRug(ctx: CanvasRenderingContext2D, x: number, y: number): void {
+  ctx.fillStyle = 'rgba(100,60,20,0.25)';
+  ctx.fillRect(x, y, TILE * 4, TILE * 2);
+  ctx.fillStyle = 'rgba(150,80,30,0.15)';
+  ctx.fillRect(x + 2, y + 2, TILE * 4 - 4, TILE * 2 - 4);
+  // Simple pattern
+  ctx.fillStyle = 'rgba(200,120,40,0.12)';
+  ctx.fillRect(x + 4, y + 4, TILE * 4 - 8, TILE * 2 - 8);
+}
+
 // ─── Workstation ─────────────────────────────────────────────────────────────
 
-function drawWorkstation(ctx: CanvasRenderingContext2D, c: Character, pcFrame: number): void {
-  const dx = c.deskX;  // logical x
-  const dy = c.deskY;  // logical y
-  const isActive = c.activity !== 'idle' && c.activity !== 'waiting';
+function drawWorkstation(
+  ctx: CanvasRenderingContext2D, c: Character, pcFrame: number, t: number,
+): void {
+  const dx = c.deskX;
+  const dy = c.deskY;
+  const isActive = c.activity !== 'idle' && c.activity !== 'waiting'
+    && c.activity !== 'gaming' && c.activity !== 'watching_tv' && c.activity !== 'coffee_break';
 
-  // Chair (behind the character, at dy+2*TILE)
-  const chairDrawn = drawFurniture(ctx, 'chair_back', dx, dy + TILE * 2);
-  if (!chairDrawn) {
-    ctx.fillStyle = '#5a3520';
-    ctx.fillRect(dx + 2, dy + TILE * 2, 12, 10);
-    ctx.fillStyle = '#4a2810';
-    ctx.fillRect(dx + 4, dy + TILE + 10, 8, TILE);
-  }
+  // Chair
+  ctx.fillStyle = '#5a3520';
+  ctx.fillRect(dx + 2, dy + TILE * 2, 12, 10);
+  ctx.fillStyle = '#4a2810';
+  ctx.fillRect(dx + 4, dy + TILE + 10, 8, TILE);
+  ctx.fillStyle = '#6a4030';
+  ctx.fillRect(dx + 2, dy + TILE * 2, 12, 4);
 
-  // Desk (DESK_FRONT.png = 48×32 — centred at dx, placed at dy+TILE)
-  const deskDrawn = drawFurniture(ctx, 'desk_front', dx - 16, dy + TILE - 2);
-  if (!deskDrawn) {
-    ctx.fillStyle = '#a07830';
-    ctx.fillRect(dx - 16, dy + TILE, 48, 4);
-    ctx.fillStyle = '#8a6420';
-    ctx.fillRect(dx - 16, dy + TILE + 4, 48, 14);
-    ctx.fillStyle = '#6a4a10';
-    ctx.fillRect(dx - 14, dy + TILE + 18, 4, 8);
-    ctx.fillRect(dx + 26, dy + TILE + 18, 4, 8);
-  }
+  // Desk
+  ctx.fillStyle = '#a07830';
+  ctx.fillRect(dx - 16, dy + TILE, 48, 4);
+  ctx.fillStyle = '#8a6420';
+  ctx.fillRect(dx - 16, dy + TILE + 4, 48, 14);
+  ctx.fillStyle = '#6a4a10';
+  ctx.fillRect(dx - 14, dy + TILE + 18, 4, 8);
+  ctx.fillRect(dx + 26, dy + TILE + 18, 4, 8);
+  // Desk items: coffee mug
+  ctx.fillStyle = '#eee8aa';
+  ctx.fillRect(dx + 20, dy + TILE, 5, 5);
+  ctx.fillStyle = '#cc8833';
+  ctx.fillRect(dx + 20, dy + TILE, 5, 1);
+  // Notepad
+  ctx.fillStyle = '#f5f5dc';
+  ctx.fillRect(dx - 14, dy + TILE, 10, 8);
+  ctx.fillStyle = 'rgba(0,0,0,0.15)';
+  for (let i = 0; i < 3; i++) ctx.fillRect(dx - 13, dy + TILE + 2 + i * 2, 7, 1);
 
-  // PC monitor (PC_FRONT_*.png = 16×32 — placed at dy+2)
+  // PC monitor
   const pcKey = getPcFrame(pcFrame, isActive);
-  const pcDrawn = drawFurniture(ctx, pcKey, dx + 2, dy + 2);
-  if (!pcDrawn) {
-    ctx.fillStyle = isActive ? '#2a3a56' : '#1e1e2e';
-    ctx.fillRect(dx + 2, dy + 2, 12, 18);
-    ctx.fillStyle = isActive ? '#3a6adf' : '#101018';
-    ctx.fillRect(dx + 4, dy + 4, 8, 10);
-    if (isActive) {
-      ctx.fillStyle = 'rgba(255,255,255,0.22)';
-      ctx.fillRect(dx + 5, dy + 5, 3, 8);
-    }
-    ctx.fillStyle = '#1a1a2e';
-    ctx.fillRect(dx + 6, dy + 20, 4, 4);
-    ctx.fillRect(dx + 4, dy + 24, 8, 2);
-  }
+  const pcDrawn = drawMonitor(ctx, pcKey, dx + 2, dy + 2, isActive, t);
+  void pcDrawn;
 
   // Glow when active
   if (isActive && c.activeTools.size > 0) {
-    ctx.globalAlpha = 0.18 + Math.sin(Date.now() / 350) * 0.08;
+    ctx.globalAlpha = 0.18 + Math.sin(t / 350) * 0.08;
     ctx.fillStyle = activityGlow(c.activity);
     ctx.fillRect(dx - 16, dy, 48, TILE * 3);
     ctx.globalAlpha = 1;
   }
 }
 
+function drawMonitor(
+  ctx: CanvasRenderingContext2D, pcKey: string, x: number, y: number, isActive: boolean, t: number,
+): boolean {
+  void pcKey;
+  // Monitor bezel
+  ctx.fillStyle = '#1e1e2e';
+  ctx.fillRect(x, y, 12, 18);
+  ctx.fillStyle = isActive ? '#2a3a56' : '#101018';
+  ctx.fillRect(x + 1, y + 1, 10, 12);
+  if (isActive) {
+    // Animated code lines
+    const lineOffset = Math.floor(t / 500) % 4;
+    const lineColors = ['#cba6f7', '#89b4fa', '#a6e3a1', '#fab387', '#f38ba8'];
+    for (let i = 0; i < 5; i++) {
+      const li = (i + lineOffset) % 5;
+      ctx.fillStyle = lineColors[li % lineColors.length];
+      const lw = 3 + (li % 3) * 2;
+      ctx.fillRect(x + 2, y + 2 + i * 2, lw, 1);
+    }
+    // Cursor blink
+    if (Math.floor(t / 500) % 2 === 0) {
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(x + 2, y + 11, 1, 2);
+    }
+    ctx.fillStyle = 'rgba(255,255,255,0.22)';
+    ctx.fillRect(x + 2, y + 2, 3, 8);
+  } else {
+    ctx.fillStyle = '#101018';
+    ctx.fillRect(x + 2, y + 2, 8, 10);
+  }
+  // Stand
+  ctx.fillStyle = '#1a1a2e';
+  ctx.fillRect(x + 5, y + 14, 2, 4);
+  ctx.fillRect(x + 3, y + 17, 6, 2);
+  return true;
+}
+
+// ─── Cat (Pet mascot) ────────────────────────────────────────────────────────
+
+function drawCat(ctx: CanvasRenderingContext2D, pet: Pet, t: number): void {
+  const x = Math.round(pet.x);
+  const y = Math.round(pet.y);
+  const isOrange = pet.color === 'orange';
+  const body   = isOrange ? '#e8941a' : '#8a8a9a';
+  const stripe = isOrange ? '#a55c00' : '#5a5a6a';
+  const belly  = isOrange ? '#f5c878' : '#c8c8d8';
+  const eye    = '#33cc66';
+  const nose   = '#ff9999';
+
+  if (pet.isSitting) {
+    drawCatSitting(ctx, x, y, body, stripe, belly, eye, nose, t);
+  } else {
+    drawCatWalking(ctx, x, y, body, stripe, belly, eye, pet.direction, pet.frame);
+  }
+
+  // Name tag above cat
+  ctx.fillStyle = 'rgba(0,0,0,0.65)';
+  ctx.fillRect(x - 2, y - 7, 16, 6);
+  ctx.fillStyle = '#f9e2af';
+  ctx.font = '4px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('pixel', x + 6, y - 3);
+  ctx.textAlign = 'left';
+}
+
+function drawCatSitting(
+  ctx: CanvasRenderingContext2D, x: number, y: number,
+  body: string, stripe: string, belly: string, eye: string, nose: string, t: number,
+): void {
+  // Ears
+  ctx.fillStyle = body;
+  ctx.fillRect(x + 1, y, 2, 3);
+  ctx.fillRect(x + 9, y, 2, 3);
+  ctx.fillStyle = nose;
+  ctx.fillRect(x + 1, y, 1, 2);
+  ctx.fillRect(x + 10, y, 1, 2);
+
+  // Head
+  ctx.fillStyle = body;
+  ctx.fillRect(x, y + 2, 12, 7);
+
+  // Stripe on head
+  ctx.fillStyle = stripe;
+  ctx.fillRect(x + 5, y + 2, 1, 3);
+  ctx.fillRect(x + 3, y + 3, 1, 2);
+  ctx.fillRect(x + 7, y + 3, 1, 2);
+
+  // Eyes (blinking every ~3s)
+  const blinkPhase = Math.floor(t / 3000) % 8;
+  if (blinkPhase === 0) {
+    ctx.fillStyle = stripe;
+    ctx.fillRect(x + 2, y + 4, 2, 1);
+    ctx.fillRect(x + 8, y + 4, 2, 1);
+  } else {
+    ctx.fillStyle = eye;
+    ctx.fillRect(x + 2, y + 4, 2, 2);
+    ctx.fillRect(x + 8, y + 4, 2, 2);
+    // Pupil
+    ctx.fillStyle = '#002200';
+    ctx.fillRect(x + 3, y + 4, 1, 2);
+    ctx.fillRect(x + 9, y + 4, 1, 2);
+  }
+
+  // Nose
+  ctx.fillStyle = nose;
+  ctx.fillRect(x + 5, y + 6, 2, 1);
+  // Whiskers
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  ctx.fillRect(x - 2, y + 6, 3, 1);
+  ctx.fillRect(x + 11, y + 6, 3, 1);
+  ctx.fillRect(x - 2, y + 7, 3, 1);
+  ctx.fillRect(x + 11, y + 7, 3, 1);
+
+  // Body
+  ctx.fillStyle = body;
+  ctx.fillRect(x + 1, y + 8, 10, 8);
+  // Belly
+  ctx.fillStyle = belly;
+  ctx.fillRect(x + 3, y + 9, 6, 6);
+  // Body stripe
+  ctx.fillStyle = stripe;
+  ctx.fillRect(x + 1, y + 9, 1, 3);
+  ctx.fillRect(x + 10, y + 9, 1, 3);
+
+  // Tail (curling to side)
+  ctx.fillStyle = body;
+  ctx.fillRect(x + 11, y + 12, 3, 2);
+  ctx.fillRect(x + 12, y + 10, 2, 3);
+  ctx.fillStyle = stripe;
+  ctx.fillRect(x + 13, y + 10, 1, 1);
+
+  // Paws
+  ctx.fillStyle = body;
+  ctx.fillRect(x + 2, y + 15, 3, 2);
+  ctx.fillRect(x + 7, y + 15, 3, 2);
+  // Paw toes
+  ctx.fillStyle = belly;
+  ctx.fillRect(x + 2, y + 16, 1, 1);
+  ctx.fillRect(x + 4, y + 16, 1, 1);
+  ctx.fillRect(x + 7, y + 16, 1, 1);
+  ctx.fillRect(x + 9, y + 16, 1, 1);
+}
+
+function drawCatWalking(
+  ctx: CanvasRenderingContext2D, x: number, y: number,
+  body: string, stripe: string, belly: string, eye: string, direction: 'left' | 'right', frame: number,
+): void {
+  const flip = direction === 'left';
+
+  ctx.save();
+  if (flip) {
+    ctx.translate(x + 12, 0);
+    ctx.scale(-1, 1);
+    ctx.translate(-x, 0);
+  }
+
+  // Body (side view)
+  ctx.fillStyle = body;
+  ctx.fillRect(x, y + 4, 12, 7);
+  // Belly
+  ctx.fillStyle = belly;
+  ctx.fillRect(x + 2, y + 7, 7, 4);
+  // Stripes
+  ctx.fillStyle = stripe;
+  ctx.fillRect(x + 4, y + 4, 1, 5);
+  ctx.fillRect(x + 7, y + 4, 1, 5);
+
+  // Head
+  ctx.fillStyle = body;
+  ctx.fillRect(x + 8, y + 1, 8, 7);
+  // Ear
+  ctx.fillStyle = body;
+  ctx.fillRect(x + 12, y, 2, 3);
+  // Eye
+  ctx.fillStyle = eye;
+  ctx.fillRect(x + 13, y + 3, 2, 2);
+  ctx.fillStyle = '#002200';
+  ctx.fillRect(x + 14, y + 3, 1, 2);
+  // Nose
+  ctx.fillStyle = '#ff9999';
+  ctx.fillRect(x + 15, y + 5, 1, 1);
+
+  // Legs (animated)
+  ctx.fillStyle = body;
+  const legOff = frame === 0 ? 0 : 2;
+  ctx.fillRect(x + 1, y + 10 + legOff, 3, 3 - legOff);
+  ctx.fillRect(x + 5, y + 10 - legOff, 3, 3 + legOff);
+  ctx.fillRect(x + 9, y + 10 + legOff, 3, 3 - legOff);
+
+  // Tail (up)
+  ctx.fillStyle = body;
+  ctx.fillRect(x - 2, y + 3, 3, 2);
+  ctx.fillRect(x - 3, y + 1, 2, 4);
+  ctx.fillRect(x - 4, y, 2, 3);
+  ctx.fillStyle = stripe;
+  ctx.fillRect(x - 3, y + 1, 1, 2);
+
+  ctx.restore();
+}
+
 // ─── Character ────────────────────────────────────────────────────────────────
 
-function drawCharacter(ctx: CanvasRenderingContext2D, c: Character): void {
+function drawCharacter(ctx: CanvasRenderingContext2D, c: Character, office: Office): void {
   const x = Math.round(c.x);
   const y = Math.round(c.y);
-  const w = CHAR_W;
-  const h = CHAR_H;
+
+  // If character is at leisure, draw them doing the activity
+  if (c.activity === 'gaming' || c.activity === 'watching_tv' || c.activity === 'coffee_break') {
+    const spot = office.leisureSpots.find((s) => s.occupant === c.id);
+    if (spot) {
+      drawCharacterAtLeisure(ctx, c, spot, office.elapsedTime);
+      return;
+    }
+  }
 
   // Selection ring
   if (c.selected) {
     ctx.strokeStyle = '#f5c2e7';
     ctx.lineWidth = 1;
     ctx.setLineDash([2, 1]);
-    ctx.strokeRect(x - 1, y - 1, w + 2, h + 2);
+    ctx.strokeRect(x - 1, y - 1, CHAR_W + 2, CHAR_H + 2);
     ctx.setLineDash([]);
   }
 
   // Ground shadow
   ctx.fillStyle = 'rgba(0,0,0,0.22)';
   ctx.beginPath();
-  ctx.ellipse(x + w / 2, y + h, w / 3, 2, 0, 0, Math.PI * 2);
+  ctx.ellipse(x + CHAR_W / 2, y + CHAR_H, CHAR_W / 3, 2, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  // Sprite (scale=1 because ctx is already scaled 2× globally)
   const spriteDrawn = drawCharacterSprite(ctx, c.palette, c.direction, c.frame, x, y, 1);
   if (!spriteDrawn) {
     ctx.fillStyle = activityGlow(c.activity);
-    ctx.fillRect(x + 2, y, w - 4, h);
+    ctx.fillRect(x + 2, y, CHAR_W - 4, CHAR_H);
     ctx.fillStyle = '#FFCBA4';
-    ctx.fillRect(x + 3, y, w - 6, 10);
+    ctx.fillRect(x + 3, y, CHAR_W - 6, 10);
   }
 
-  // Activity badge
+  drawCharacterBadge(ctx, c, x, y);
+  drawCharacterLabel(ctx, c, x, y);
+  drawSpeechBubble(ctx, c, x, y);
+  drawTokenBar(ctx, c, x, y);
+}
+
+function drawCharacterAtLeisure(
+  ctx: CanvasRenderingContext2D, c: Character, spot: LeisureSpot, t: number,
+): void {
+  const x = Math.round(spot.standX);
+  const y = Math.round(spot.standY);
+
+  // Ground shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.22)';
+  ctx.beginPath();
+  ctx.ellipse(x + CHAR_W / 2, y + CHAR_H, CHAR_W / 3, 2, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Draw character facing the spot
+  const dir = spot.type === 'coffee' ? 'up' : 'down';
+  const frame = Math.floor(t / 600) % 4;
+  const spriteDrawn = drawCharacterSprite(ctx, c.palette, dir, frame, x, y, 1);
+  if (!spriteDrawn) {
+    ctx.fillStyle = activityGlow(c.activity);
+    ctx.fillRect(x + 2, y, CHAR_W - 4, CHAR_H);
+    ctx.fillStyle = '#FFCBA4';
+    ctx.fillRect(x + 3, y, CHAR_W - 6, 10);
+  }
+
+  // Activity indicator above character
+  const icons: Record<string, string> = { gaming: '🎮', tv: '📺', coffee: '☕' };
+  const icon = icons[spot.type] ?? '•';
+  ctx.fillStyle = 'rgba(0,0,0,0.72)';
+  ctx.fillRect(x + 1, y - 10, 14, 9);
+  ctx.font = '7px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(icon, x + CHAR_W / 2, y - 3);
+  ctx.textAlign = 'left';
+
+  drawCharacterLabel(ctx, c, x, y);
+}
+
+function drawCharacterBadge(ctx: CanvasRenderingContext2D, c: Character, x: number, y: number): void {
   const badge = activityBadge(c.activity);
-  if (badge) {
-    ctx.fillStyle = 'rgba(0,0,0,0.75)';
-    ctx.fillRect(x + 3, y - 8, 10, 7);
-    ctx.font = '6px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillStyle = '#fff';
-    ctx.fillText(badge, x + w / 2, y - 3);
-    ctx.textAlign = 'left';
-  }
+  if (!badge) return;
+  ctx.fillStyle = 'rgba(0,0,0,0.75)';
+  ctx.fillRect(x + 3, y - 8, 10, 7);
+  ctx.font = '6px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#fff';
+  ctx.fillText(badge, x + CHAR_W / 2, y - 3);
+  ctx.textAlign = 'left';
+}
 
-  // Name label
+function drawCharacterLabel(ctx: CanvasRenderingContext2D, c: Character, x: number, y: number): void {
   const label = c.name.length > 9 ? c.name.slice(0, 8) + '…' : c.name;
   const lw = label.length * 4 + 4;
   ctx.fillStyle = 'rgba(0,0,0,0.72)';
-  ctx.fillRect(x + w / 2 - lw / 2, y + h + 1, lw, 7);
+  ctx.fillRect(x + CHAR_W / 2 - lw / 2, y + CHAR_H + 1, lw, 7);
   ctx.fillStyle = c.selected ? '#f5c2e7' : '#ddd';
   ctx.font = '5px monospace';
   ctx.textAlign = 'center';
-  ctx.fillText(label, x + w / 2, y + h + 6);
+  ctx.fillText(label, x + CHAR_W / 2, y + CHAR_H + 6);
   ctx.textAlign = 'left';
+}
 
-  // Speech bubble
-  if (c.speechBubble) {
-    const txt = c.speechBubble.text;
-    const bw = Math.min(txt.length * 4 + 8, 60);
-    const bx = Math.max(1, x + w / 2 - bw / 2);
-    const by = y - 18;
-    ctx.fillStyle = '#fff';
-    ctx.fillRect(bx, by, bw, 11);
-    ctx.strokeStyle = '#aaa';
-    ctx.lineWidth = 0.5;
-    ctx.strokeRect(bx, by, bw, 11);
-    ctx.fillStyle = '#fff';
-    ctx.fillRect(x + w / 2 - 2, by + 10, 4, 3);
-    ctx.fillStyle = '#333';
-    ctx.font = '5px monospace';
-    ctx.textAlign = 'center';
-    ctx.fillText(txt, bx + bw / 2, by + 7);
-    ctx.textAlign = 'left';
-  }
+function drawSpeechBubble(ctx: CanvasRenderingContext2D, c: Character, x: number, y: number): void {
+  if (!c.speechBubble) return;
+  const txt = c.speechBubble.text;
+  const bw = Math.min(txt.length * 4 + 8, 60);
+  const bx = Math.max(1, x + CHAR_W / 2 - bw / 2);
+  const by = y - 18;
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(bx, by, bw, 11);
+  ctx.strokeStyle = '#aaa';
+  ctx.lineWidth = 0.5;
+  ctx.strokeRect(bx, by, bw, 11);
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(x + CHAR_W / 2 - 2, by + 10, 4, 3);
+  ctx.fillStyle = '#333';
+  ctx.font = '5px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(txt, bx + bw / 2, by + 7);
+  ctx.textAlign = 'left';
+}
 
-  // Token usage bar
+function drawTokenBar(ctx: CanvasRenderingContext2D, c: Character, x: number, y: number): void {
   const usage = Math.min((c.inputTokens + c.outputTokens) / 200_000, 1);
-  if (usage > 0) {
-    ctx.fillStyle = '#1a1a2e';
-    ctx.fillRect(x, y + h + 9, w, 2);
-    ctx.fillStyle = usage > 0.8 ? '#f38ba8' : usage > 0.5 ? '#fab387' : '#a6e3a1';
-    ctx.fillRect(x, y + h + 9, Math.round(w * usage), 2);
-  }
+  if (usage === 0) return;
+  ctx.fillStyle = '#1a1a2e';
+  ctx.fillRect(x, y + CHAR_H + 9, CHAR_W, 2);
+  ctx.fillStyle = usage > 0.8 ? '#f38ba8' : usage > 0.5 ? '#fab387' : '#a6e3a1';
+  ctx.fillRect(x, y + CHAR_H + 9, Math.round(CHAR_W * usage), 2);
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -551,6 +1457,22 @@ function toolStatusToActivity(status: ToolStatus): CharacterActivity {
     case 'running': return 'running';
     case 'searching': return 'searching';
     default: return 'typing';
+  }
+}
+
+function goalToActivity(goal: LeisureType): CharacterActivity {
+  switch (goal) {
+    case 'gaming': return 'gaming';
+    case 'tv': return 'watching_tv';
+    case 'coffee': return 'coffee_break';
+  }
+}
+
+function goalBubble(goal: LeisureType): string {
+  switch (goal) {
+    case 'gaming': return 'GG EZ';
+    case 'tv': return '📺';
+    case 'coffee': return '☕ ahhh';
   }
 }
 
@@ -572,6 +1494,9 @@ function activityGlow(activity: CharacterActivity): string {
     case 'running': return '#ff9955';
     case 'searching': return '#cc55ff';
     case 'waiting': return '#ffdd55';
+    case 'gaming': return '#8844ff';
+    case 'watching_tv': return '#4488ff';
+    case 'coffee_break': return '#cc7722';
     default: return '#6B8CFF';
   }
 }

@@ -37,6 +37,22 @@ document.addEventListener('DOMContentLoaded', () => {
   canvas.id = 'office-canvas';
   canvasWrap.appendChild(canvas);
 
+  // Empty-state overlay (shown when no agents; hidden otherwise)
+  const emptyOverlay = document.createElement('div');
+  emptyOverlay.id = 'empty-overlay';
+  emptyOverlay.innerHTML = `
+    <div class="empty-icon">👾</div>
+    <div class="empty-title">No active agents</div>
+    <div class="empty-subtitle">Run an agent and it will appear here.<br>Make sure hooks are installed first.</div>
+    <button id="install-hooks-btn">⚙ Install / Reinstall Hooks</button>
+    <div class="empty-hint">Or: <code>Ctrl+Shift+P</code> → Copilot Pixel Agents: Install Hooks</div>
+  `;
+  canvasWrap.appendChild(emptyOverlay);
+
+  document.getElementById('install-hooks-btn')?.addEventListener('click', () => {
+    post({ type: 'installHooks' });
+  });
+
   // Bottom panel
   const bottomPanel = document.createElement('div');
   bottomPanel.id = 'bottom-panel';
@@ -70,6 +86,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   startLoop(office);
 
+  function syncEmptyOverlay() {
+    emptyOverlay.style.display = office.characters.size === 0 ? 'flex' : 'none';
+  }
+  syncEmptyOverlay();
+
   // ── Inspector logic ──────────────────────────────────────────────────────
   office.onCharacterClick = (id: string) => {
     if (!id) { inspector.style.display = 'none'; return; }
@@ -90,16 +111,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
       case 'existingAgents':
         for (const a of msg.agents) addCharacter(office, a.id, a.name);
+        syncEmptyOverlay();
         renderAgentsStrip(agentsStrip, office);
         break;
 
       case 'agentCreated':
         addCharacter(office, msg.id, msg.name);
+        syncEmptyOverlay();
         renderAgentsStrip(agentsStrip, office);
         break;
 
       case 'agentRemoved':
         removeCharacter(office, msg.id);
+        syncEmptyOverlay();
         inspector.style.display = 'none';
         renderAgentsStrip(agentsStrip, office);
         break;
@@ -242,6 +266,7 @@ function actLabel(a: string): string {
   const map: Record<string, string> = {
     typing: '⌨ Writing', reading: '📖 Reading', running: '⚙ Running',
     searching: '🔍 Searching', waiting: '⏳ Waiting', walking: '🚶 Walking', idle: '💤 Idle',
+    gaming: '🎮 Gaming', watching_tv: '📺 Watching TV', coffee_break: '☕ Coffee Break',
   };
   return map[a] ?? a;
 }

@@ -14,12 +14,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const config = vscode.workspace.getConfiguration('copilotPixelAgents');
   const configuredPort = config.get<number>('port', 7823);
 
+  const channel = vscode.window.createOutputChannel('Copilot Pixel Agents');
+  context.subscriptions.push(channel);
+
   const store = new AgentStore();
-  const server = new HooksServer(store, configuredPort);
+  const server = new HooksServer(store, channel, configuredPort);
 
   let port: number;
   try {
     port = await server.start();
+    channel.appendLine(`Hooks server started on port ${port}`);
   } catch (err) {
     vscode.window.showErrorMessage(`Copilot Pixel Agents: failed to start hooks server — ${err}`);
     return;

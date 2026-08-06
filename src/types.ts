@@ -36,7 +36,8 @@ export type ServerMessage =
 export type ClientMessage =
   | { type: 'webviewReady' }
   | { type: 'focusAgent'; id: string }
-  | { type: 'closeAgent'; id: string };
+  | { type: 'closeAgent'; id: string }
+  | { type: 'installHooks' };
 
 export function toolNameToStatus(toolName: string): ToolStatus {
   const name = toolName.toLowerCase();

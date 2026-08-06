@@ -1,6 +1,33 @@
 # Changelog
 
-## [0.4.0] — 2026-06-09 (current)
+## [0.4.4] — 2026-06-09 (current)
+
+### Fixed
+- `TypeError: i.includes is not a function` crash during Copilot hooks install — `chat.hookFilesLocations` can return a non-array in VS Code versions where the setting is not registered; now handled defensively with `Array.isArray()` check and the update is wrapped in try/catch so it never breaks the install flow
+- Copilot hook files are now also written to `~/.copilot/hooks/` (VS Code's standard user-level hooks directory), so they work even without the `chat.hookFilesLocations` setting
+
+## [0.4.3] — 2026-06-09
+
+### Fixed — GitHub Copilot hooks
+- **Hooks location**: Copilot hooks are now written to `~/.copilot-pixel-agents/copilot-hooks/` as individual `pre-tool-use.json` / `post-tool-use.json` / `stop.json` files and registered via VS Code `chat.hookFilesLocations` setting — the previous `~/.vscode/agent-hooks.json` mechanism was not the correct Copilot hooks API
+- **JSON field names**: hook.sh now parses both camelCase (`sessionId`, `toolName`) used by GitHub Copilot AND snake_case (`session_id`, `tool_name`) used by Claude Code
+- **fail-closed hooks**: hook.sh now outputs `{"permissionDecision":"allow"}` to stdout — required by the Copilot hooks spec; hooks without this response cause tool calls to be denied
+
+## [0.4.2] — 2026-06-09
+
+### Added
+- **Output channel**: all hook events are now logged to the "Copilot Pixel Agents" output panel (`View → Output → Copilot Pixel Agents`) — makes it easy to confirm hooks are reaching the server
+- **Actionable empty state**: the canvas now shows an "Install / Reinstall Hooks" button when no agents are running — clicking it runs the hooks installer without leaving the panel
+
+### Fixed
+- Empty state was a static canvas overlay with no interactivity; replaced with an HTML overlay that the button can be clicked
+
+## [0.4.1] — 2026-06-09
+
+### Fixed
+- Activity Bar icon now appears after Marketplace install — `media/icon.svg` was accidentally excluded from the VSIX package via `.vscodeignore`
+
+## [0.4.0] — 2026-06-09
 
 ### Changed
 - **Zero-friction setup:** `Install Hooks` now auto-configures GitHub Copilot (`~/.vscode/agent-hooks.json`) AND Claude Code (`~/.claude/settings.json`) in one click — no manual file editing required

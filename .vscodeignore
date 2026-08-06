@@ -14,4 +14,3 @@ tsconfig.json
 **/*.test.*
 **/.github/**
 .vscode/**
-media/icon.svg
