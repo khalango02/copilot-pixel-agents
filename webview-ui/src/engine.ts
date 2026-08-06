@@ -15,17 +15,16 @@ const DESK_SPACING_Y = 5;
 const DESK_START_COL = 1;
 const DESK_START_ROW = WALL_ROWS;
 
+// Decoration scale helpers (applied via ctx.save/scale/restore in drawRoomDecorations)
+const STATIC_DECO_SCALE = 2;   // plants, bookshelf, coffee machine
+const LEISURE_SCALE     = 1.8; // gaming setup, TV+couch
+
 // Idle leisure timings
 const IDLE_WANDER_MS = 10_000;      // after this long idle, consider leisure
 const LEISURE_MIN_MS = 15_000;      // minimum time at leisure spot
 const LEISURE_MAX_MS = 35_000;      // maximum time at leisure spot
 const LEISURE_CHANCE = 0.45;        // probability of picking leisure vs staying at desk
 
-// Floor palette
-const PLANK_PALETTES = [
-  ['#2e1c0a', '#3a2410', '#2a180a', '#33200e'],
-  ['#231409', '#2c1a0d', '#27170b', '#2a1a0c'],
-];
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -174,37 +173,38 @@ function computeLeisureSpots(office: Office): void {
   const { cols, rows } = office;
   const spots: LeisureSpot[] = [];
 
-  // Coffee machine: top-right, just below wall
+  // Coffee machine (drawn at STATIC_DECO_SCALE = 2×): 24×40px logical from (cmX, cmY)
   if (cols >= 5) {
     const cx = (cols - 2) * TILE;
     const cy = WALL_ROWS * TILE;
     spots.push({
       type: 'coffee',
       itemX: cx, itemY: cy,
-      standX: cx - TILE, standY: cy + TILE * 2,
+      standX: cx - TILE, standY: cy + TILE * 2 + 4,
       occupant: null,
     });
   }
 
-  // Gaming setup: bottom-left corner
+  // Gaming setup (drawn at LEISURE_SCALE = 1.5×): bean bag at ~(3, 27–42) from origin
   if (rows >= 10 && cols >= 6) {
     const gY = (rows - 5) * TILE;
     spots.push({
       type: 'gaming',
       itemX: 0, itemY: gY,
-      standX: TILE + 2, standY: gY + TILE,
+      standX: TILE + 4, standY: gY + TILE * 2 + 4,
       occupant: null,
     });
   }
 
-  // TV + couch: bottom-right corner
-  if (rows >= 10 && cols >= 8) {
-    const tvX = (cols - 6) * TILE;
+  // TV + couch (drawn at LEISURE_SCALE = 1.5×): shifted right to avoid overlap with gaming
+  // tvX uses (cols-4) instead of (cols-6) so gaming (ends ~42px) and TV (starts at cols-4*TILE) don't overlap
+  if (rows >= 10 && cols >= 7) {
+    const tvX = Math.max(TILE * 3, (cols - 4) * TILE);
     const tvY = (rows - 5) * TILE;
     spots.push({
       type: 'tv',
       itemX: tvX, itemY: tvY,
-      standX: tvX + TILE * 2, standY: tvY + TILE,
+      standX: tvX + TILE * 2, standY: tvY + TILE * 2,
       occupant: null,
     });
   }
@@ -478,11 +478,35 @@ function freeSpotsFor(office: Office, agentId: string): void {
   }
 }
 
+function furnitureZones(office: Office): Array<{ x: number; y: number; w: number; h: number }> {
+  const { cols, rows } = office;
+  const z: Array<{ x: number; y: number; w: number; h: number }> = [];
+  if (rows >= 10 && cols >= 6) {
+    const gY = (rows - 5) * TILE;
+    z.push({ x: 0, y: gY, w: 54, h: 50 });
+  }
+  if (rows >= 10 && cols >= 7) {
+    const tvX = Math.max(TILE * 3, (cols - 4) * TILE);
+    const tvY = (rows - 5) * TILE;
+    z.push({ x: tvX, y: tvY - 4, w: 65, h: 58 });
+  }
+  return z;
+}
+
+function petInZone(px: number, py: number, zones: Array<{ x: number; y: number; w: number; h: number }>): boolean {
+  const pw = 12, ph = 16;
+  for (const z of zones) {
+    if (px + pw > z.x && px < z.x + z.w && py + ph > z.y && py < z.y + z.h) return true;
+  }
+  return false;
+}
+
 function updatePet(office: Office, dt: number): void {
   const pet = office.pet;
   const floorY = WALL_ROWS * TILE + TILE;
   const maxX = Math.max(TILE, (office.cols - 3) * TILE);
   const maxY = Math.max(floorY + TILE, (office.rows - 2) * TILE);
+  const zones = furnitureZones(office);
 
   // Frame animation
   pet.frameTimer += dt;
@@ -500,9 +524,15 @@ function updatePet(office: Office, dt: number): void {
       ? 3000 + Math.random() * 5000    // sit for 3-8s
       : 2000 + Math.random() * 4000;   // walk for 2-6s
     if (!pet.isSitting) {
-      // Pick new target
-      pet.targetX = Math.max(TILE, Math.min(maxX, TILE + Math.floor(Math.random() * maxX)));
-      pet.targetY = Math.max(floorY, Math.min(maxY, floorY + Math.floor(Math.random() * (maxY - floorY))));
+      // Pick new target, retry up to 10 times to avoid furniture zones
+      let tx = 0, ty = 0;
+      for (let i = 0; i < 10; i++) {
+        tx = Math.max(TILE, Math.min(maxX, TILE + Math.floor(Math.random() * maxX)));
+        ty = Math.max(floorY, Math.min(maxY, floorY + Math.floor(Math.random() * (maxY - floorY))));
+        if (!petInZone(tx, ty, zones)) break;
+      }
+      pet.targetX = tx;
+      pet.targetY = ty;
     }
   }
 
@@ -518,9 +548,17 @@ function updatePet(office: Office, dt: number): void {
       pet.isSitting = true;
       pet.sitTimer = 2000 + Math.random() * 4000;
     } else {
-      pet.x += (dx / dist) * speed;
-      pet.y += (dy / dist) * speed;
-      pet.direction = dx >= 0 ? 'right' : 'left';
+      const newX = pet.x + (dx / dist) * speed;
+      const newY = pet.y + (dy / dist) * speed;
+      if (petInZone(newX, newY, zones)) {
+        // Hit furniture — sit and pick new target next cycle
+        pet.isSitting = true;
+        pet.sitTimer = 500 + Math.random() * 1000;
+      } else {
+        pet.x = newX;
+        pet.y = newY;
+        pet.direction = dx >= 0 ? 'right' : 'left';
+      }
     }
   }
 }
@@ -562,129 +600,194 @@ function render(office: Office): void {
 // ─── Floor ────────────────────────────────────────────────────────────────────
 
 function drawFloor(ctx: CanvasRenderingContext2D, office: Office): void {
-  const LW = office.cols * TILE;
-  for (let row = WALL_ROWS; row < office.rows; row++) {
-    const y = row * TILE;
-    const palette = PLANK_PALETTES[Math.floor(row / 2) % 2];
-    ctx.fillStyle = palette[row % palette.length];
-    ctx.fillRect(0, y, LW, TILE - 1);
-    ctx.fillStyle = '#1a0d04';
-    ctx.fillRect(0, y + TILE - 1, LW, 1);
-    const offset = (row % 2) * TILE * 2;
-    ctx.fillStyle = 'rgba(0,0,0,0.3)';
-    for (let jx = offset; jx < LW + TILE * 4; jx += TILE * 4) {
-      ctx.fillRect(jx, y, 1, TILE - 1);
+  const { cols, rows } = office;
+  const W = cols * TILE;
+  const floorY = WALL_ROWS * TILE;
+  const floorH = (rows - WALL_ROWS) * TILE;
+
+  // Base fill — warm gray-teal tile (RPG office style)
+  ctx.fillStyle = '#afc0b8';
+  ctx.fillRect(0, floorY, W, floorH);
+
+  // Alternating 2×2 tile shading for subtle checkerboard depth
+  for (let row = WALL_ROWS; row < rows; row += 2) {
+    for (let col = 0; col < cols; col += 2) {
+      ctx.fillStyle = (Math.floor(row / 2) + Math.floor(col / 2)) % 2 === 0
+        ? 'rgba(255,255,255,0.06)'
+        : 'rgba(0,0,0,0.04)';
+      ctx.fillRect(col * TILE, row * TILE, TILE * 2, TILE * 2);
     }
-    ctx.fillStyle = 'rgba(255,190,100,0.04)';
-    ctx.fillRect(0, y + 1, LW, 2);
+  }
+
+  // Tile grid lines — horizontal
+  ctx.fillStyle = 'rgba(0,0,0,0.13)';
+  for (let row = WALL_ROWS; row <= rows; row++) {
+    ctx.fillRect(0, row * TILE, W, 1);
+  }
+  // Tile grid lines — vertical
+  for (let col = 0; col <= cols; col++) {
+    ctx.fillRect(col * TILE, floorY, 1, floorH);
   }
 }
 
 // ─── Walls ────────────────────────────────────────────────────────────────────
 
 function drawWalls(ctx: CanvasRenderingContext2D, office: Office): void {
-  const LW = office.cols * TILE;
+  const { cols } = office;
+  const LW = cols * TILE;
   const wallH = WALL_ROWS * TILE;
 
-  ctx.fillStyle = '#1e2d3e';
+  // Cream/beige wall base
+  ctx.fillStyle = '#d8cfb0';
   ctx.fillRect(0, 0, LW, wallH);
 
-  for (let y = 0; y < wallH; y += 5) {
-    ctx.fillStyle = y % 10 === 0 ? 'rgba(0,0,0,0.18)' : 'rgba(255,255,255,0.025)';
+  // Subtle wall texture
+  for (let y = 0; y < wallH; y += 3) {
+    ctx.fillStyle = 'rgba(0,0,0,0.025)';
     ctx.fillRect(0, y, LW, 1);
   }
 
-  ctx.fillStyle = '#152230';
-  ctx.fillRect(0, 0, LW, 2);
+  // Ceiling line
+  ctx.fillStyle = '#c2b898';
+  ctx.fillRect(0, 0, LW, 1);
 
-  // Startup logo on wall (centered)
-  const logoX = Math.floor(LW / 2) - 12;
-  const logoY = 4;
-  ctx.fillStyle = 'rgba(100,200,255,0.15)';
-  ctx.fillRect(logoX, logoY, 24, 10);
-  ctx.fillStyle = 'rgba(100,200,255,0.4)';
-  ctx.fillRect(logoX + 2, logoY + 2, 20, 6);
-  ctx.fillStyle = 'rgba(255,255,255,0.6)';
-  ctx.font = '5px monospace';
-  ctx.textAlign = 'center';
-  ctx.fillText('DEV CO.', Math.floor(LW / 2), logoY + 8);
-  ctx.textAlign = 'left';
+  // Windows with wood frames and blue glass panes
+  const winW = 20;
+  const winH = wallH - 6;
+  let wx = 6;
+  while (wx + winW + 4 <= LW - 22) {
+    // Wood frame
+    ctx.fillStyle = '#9a7030';
+    ctx.fillRect(wx - 2, 2, winW + 4, winH + 2);
+    // Glass — blue sky
+    ctx.fillStyle = '#78aad0';
+    ctx.fillRect(wx, 3, winW, winH);
+    // Upper half brighter
+    ctx.fillStyle = '#98c4e8';
+    ctx.fillRect(wx + 1, 4, winW - 2, Math.floor(winH / 2) - 1);
+    // Light streak
+    ctx.fillStyle = 'rgba(255,255,255,0.28)';
+    ctx.fillRect(wx + 2, 4, 3, winH - 2);
+    // Divider cross
+    ctx.fillStyle = '#9a7030';
+    ctx.fillRect(wx, 3 + Math.floor(winH / 2), winW, 2);
+    ctx.fillRect(wx + Math.floor(winW / 2) - 1, 3, 2, winH);
+    wx += winW + 14;
+    if (wx + winW > LW - 18) break;
+  }
 
-  // Windows
-  const winW = 24;
-  const winH = wallH - 10;
-  for (let wx = 10; wx + winW + 10 <= LW; wx += 44) {
-    ctx.fillStyle = '#131e28';
-    ctx.fillRect(wx - 1, 3, winW + 2, winH + 4);
-    ctx.fillStyle = '#3a5678';
-    ctx.fillRect(wx, 4, winW, winH);
-    ctx.fillStyle = '#4a7298';
-    ctx.fillRect(wx + 2, 6, winW - 4, winH - 2);
-    ctx.fillStyle = '#5a8aad';
-    ctx.fillRect(wx + 2, 6, winW - 4, Math.floor((winH - 2) / 2));
-    ctx.fillStyle = 'rgba(200,235,255,0.15)';
-    ctx.fillRect(wx + 3, 7, 4, winH - 4);
-    ctx.fillStyle = '#3a5678';
-    ctx.fillRect(wx, 4 + Math.floor(winH / 2), winW, 2);
-    ctx.fillRect(wx + Math.floor(winW / 2) - 1, 4, 2, winH);
+  // Clock on the right side of the wall
+  if (LW > 50) {
+    const clkR = 7;
+    const clkX = LW - clkR - 4;
+    const clkY = clkR + 3;
+    // Face
+    ctx.fillStyle = '#f5eed8';
+    ctx.beginPath();
+    ctx.arc(clkX, clkY, clkR, 0, Math.PI * 2);
+    ctx.fill();
+    // Rim
+    ctx.strokeStyle = '#8a6828';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(clkX, clkY, clkR, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.lineWidth = 0.5;
+    // Hour tick marks
+    ctx.fillStyle = '#5a4018';
+    for (let i = 0; i < 12; i++) {
+      const a = (i / 12) * Math.PI * 2 - Math.PI / 2;
+      ctx.fillRect(
+        Math.round(clkX + Math.cos(a) * (clkR - 1.5) - 0.5),
+        Math.round(clkY + Math.sin(a) * (clkR - 1.5) - 0.5),
+        1, 1,
+      );
+    }
+    // Hands (real time)
+    const now = new Date();
+    const hrA = ((now.getHours() % 12) + now.getMinutes() / 60) / 12 * Math.PI * 2 - Math.PI / 2;
+    const mnA = now.getMinutes() / 60 * Math.PI * 2 - Math.PI / 2;
+    ctx.strokeStyle = '#2a1808';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(clkX, clkY);
+    ctx.lineTo(clkX + Math.cos(hrA) * 3.5, clkY + Math.sin(hrA) * 3.5); ctx.stroke();
+    ctx.strokeStyle = '#5a3810'; ctx.lineWidth = 0.5;
+    ctx.beginPath(); ctx.moveTo(clkX, clkY);
+    ctx.lineTo(clkX + Math.cos(mnA) * 5.5, clkY + Math.sin(mnA) * 5.5); ctx.stroke();
+    ctx.lineWidth = 1;
   }
 }
 
 function drawBaseboardShadow(ctx: CanvasRenderingContext2D, office: Office): void {
   const LW = office.cols * TILE;
   const baseY = WALL_ROWS * TILE;
-  ctx.fillStyle = '#5c3d1a';
-  ctx.fillRect(0, baseY, LW, 4);
-  ctx.fillStyle = '#7a5228';
-  ctx.fillRect(0, baseY, LW, 2);
-  ctx.fillStyle = 'rgba(0,0,0,0.35)';
-  ctx.fillRect(0, baseY + 4, LW, 4);
+  // Warm wood baseboard
+  ctx.fillStyle = '#9a7030';
+  ctx.fillRect(0, baseY, LW, 3);
+  ctx.fillStyle = '#b88840';
+  ctx.fillRect(0, baseY, LW, 1);
+  // Shadow below baseboard
+  ctx.fillStyle = 'rgba(0,0,0,0.22)';
+  ctx.fillRect(0, baseY + 3, LW, 3);
 }
 
 // ─── Room Decorations ─────────────────────────────────────────────────────────
 
+// Helper: draw fn at position (tx, ty) with scale factor s
+function scaled(
+  ctx: CanvasRenderingContext2D,
+  tx: number, ty: number, s: number,
+  fn: (ctx: CanvasRenderingContext2D) => void,
+): void {
+  ctx.save();
+  ctx.translate(tx, ty);
+  ctx.scale(s, s);
+  fn(ctx);
+  ctx.restore();
+}
+
 function drawRoomDecorations(ctx: CanvasRenderingContext2D, office: Office): void {
   const { cols, rows } = office;
   const baseY = WALL_ROWS * TILE;
+  const S = STATIC_DECO_SCALE;
+  const LS = LEISURE_SCALE;
 
-  // Tall plant — always at top-left below wall
-  drawPlantTall(ctx, 0, baseY);
+  // Tall plant — top-left corner (2×)
+  scaled(ctx, 0, baseY, S, (c) => drawPlantTall(c, 0, 0));
 
-  // Coffee machine — always at top-right if there's room
+  // Coffee machine — top-right (2×)
   if (cols >= 5) {
     const cmX = (cols - 2) * TILE;
-    drawCoffeeMachine(ctx, cmX, baseY, office.elapsedTime);
-    // Small plant next to it
-    if (cols >= 6) drawPlantSmall(ctx, (cols - 1) * TILE, baseY + TILE * 2);
+    scaled(ctx, cmX, baseY, S, (c) => drawCoffeeMachine(c, 0, 0, office.elapsedTime));
   }
 
-  // Bookshelf along left wall
-  if (rows >= 8) {
-    drawBookshelf(ctx, 0, (WALL_ROWS + 3) * TILE);
+  // Bookshelf — beside coffee machine, top-right (2×)
+  if (cols >= 6) {
+    const bsX = (cols - 5) * TILE;
+    scaled(ctx, bsX, baseY, S, (c) => drawBookshelf(c, 0, 0));
   }
 
-  // Gaming setup — bottom-left
+  // Small plant — between bookshelf and coffee machine (2×)
+  if (cols >= 8) {
+    const cmX = (cols - 2) * TILE;
+    scaled(ctx, cmX - TILE * 2, baseY + TILE, S, (c) => drawPlantSmall(c, 0, 0));
+  }
+
+  // Gaming setup — bottom-left (1.8×)
   if (rows >= 10 && cols >= 6) {
     const gY = (rows - 5) * TILE;
     const spot = office.leisureSpots.find((s) => s.type === 'gaming');
     const active = spot?.occupant !== null;
-    drawGamingSetup(ctx, 0, gY, active, office.elapsedTime);
+    scaled(ctx, 0, gY, LS, (c) => drawGamingSetup(c, 0, 0, active, office.elapsedTime));
   }
 
-  // TV + couch — bottom-right
-  if (rows >= 10 && cols >= 8) {
-    const tvX = (cols - 6) * TILE;
+  // TV + couch — bottom-right (1.8×)
+  if (rows >= 10 && cols >= 7) {
+    const tvX = Math.max(TILE * 3, (cols - 4) * TILE);
     const tvY = (rows - 5) * TILE;
     const spot = office.leisureSpots.find((s) => s.type === 'tv');
     const active = spot?.occupant !== null;
-    drawCouchTV(ctx, tvX, tvY, active, office.elapsedTime);
-  }
-
-  // Area rug in the center (decorative)
-  if (cols >= 8 && rows >= 12) {
-    const rugX = Math.floor(cols / 2) * TILE - TILE * 2;
-    const rugY = Math.floor(rows / 2) * TILE;
-    drawAreaRug(ctx, rugX, rugY);
+    scaled(ctx, tvX, tvY, LS, (c) => drawCouchTV(c, 0, 0, active, office.elapsedTime));
   }
 }
 
@@ -900,15 +1003,9 @@ function drawGamingSetup(
     ctx.fillRect(x + 22, y + 6, 3, 3);
     ctx.fillStyle = '#4444ff';
     ctx.fillRect(x + 19, y + 7, 2, 2);
-    // Score text
-    ctx.fillStyle = '#ffffff';
-    ctx.font = '4px monospace';
-    ctx.fillText('42', x + 16, y + 3);
   } else {
     ctx.fillStyle = '#1a1a2e';
     ctx.fillRect(x + 17, y + 3, 8, 6);
-    ctx.fillStyle = '#333355';
-    ctx.fillText('PAUSED', x + 15, y + 9);
   }
 
   // Game console
@@ -934,10 +1031,6 @@ function drawGamingSetup(
   ctx.fillStyle = active ? '#4444ff' : '#333366';
   ctx.fillRect(x + 10, y + TILE + 9, 1, 1);
 
-  // Label
-  ctx.fillStyle = 'rgba(255,255,255,0.3)';
-  ctx.font = '4px monospace';
-  ctx.fillText('GAME', x + 15, y + 22);
 }
 
 // ─── TV + Couch ───────────────────────────────────────────────────────────────
@@ -945,51 +1038,13 @@ function drawGamingSetup(
 function drawCouchTV(
   ctx: CanvasRenderingContext2D, x: number, y: number, active: boolean, t: number,
 ): void {
-  // Area rug
-  ctx.fillStyle = '#3a2a1a';
-  ctx.fillRect(x, y + TILE, 36, 14);
-  ctx.fillStyle = '#4a3525';
-  ctx.fillRect(x + 1, y + TILE + 1, 34, 12);
-  // Rug pattern
-  ctx.fillStyle = '#5a4535';
-  for (let i = 0; i < 4; i++) {
-    ctx.fillRect(x + 4 + i * 8, y + TILE + 4, 4, 4);
-  }
-
-  // Couch — main body
-  ctx.fillStyle = '#4a5568';
-  ctx.fillRect(x, y + TILE + 4, 34, 10);
-  ctx.fillStyle = '#5a6678';
-  ctx.fillRect(x + 1, y + TILE + 4, 32, 8);
-  // Cushions
-  ctx.fillStyle = '#6a7688';
-  ctx.fillRect(x + 2, y + TILE + 5, 14, 6);
-  ctx.fillRect(x + 18, y + TILE + 5, 14, 6);
-  // Cushion highlights
-  ctx.fillStyle = 'rgba(255,255,255,0.1)';
-  ctx.fillRect(x + 3, y + TILE + 5, 8, 2);
-  ctx.fillRect(x + 19, y + TILE + 5, 8, 2);
-  // Armrests
-  ctx.fillStyle = '#4a5568';
-  ctx.fillRect(x, y + TILE + 3, 3, 11);
-  ctx.fillRect(x + 31, y + TILE + 3, 3, 11);
-  ctx.fillStyle = '#5a6678';
-  ctx.fillRect(x, y + TILE + 3, 3, 2);
-  ctx.fillRect(x + 31, y + TILE + 3, 3, 2);
-  // Couch legs
-  ctx.fillStyle = '#3a2a1a';
-  ctx.fillRect(x + 2, y + TILE + 13, 3, 2);
-  ctx.fillRect(x + 29, y + TILE + 13, 3, 2);
-
-  // TV unit — against the wall
+  // TV unit — against the wall, drawn first so couch appears in front
   ctx.fillStyle = '#1a1a22';
   ctx.fillRect(x + 6, y - 2, 22, 16);
-  // Screen bezel
   ctx.fillStyle = active ? '#0d1520' : '#0a0a0e';
   ctx.fillRect(x + 7, y - 1, 20, 14);
 
   if (active) {
-    // Show content on TV
     const ch = Math.floor(t / 8000) % 3;
     if (ch === 0) {
       // Nature documentary (green)
@@ -1002,20 +1057,17 @@ function drawCouchTV(
       ctx.fillStyle = '#88dd55';
       ctx.fillRect(x + 10, y + 3, 4, 3);
     } else if (ch === 1) {
-      // News / code (blue/white)
+      // News — pixel lines only, no text
       ctx.fillStyle = '#0a1a3a';
       ctx.fillRect(x + 8, y, 18, 12);
       ctx.fillStyle = '#1a3a7a';
       ctx.fillRect(x + 8, y, 18, 3);
-      ctx.fillStyle = '#ffffff';
-      ctx.font = '3px monospace';
-      ctx.fillText('BREAKING', x + 9, y + 2);
       ctx.fillStyle = '#aaaaff';
       for (let i = 0; i < 3; i++) {
         ctx.fillRect(x + 9, y + 4 + i * 3, 14, 1);
       }
     } else {
-      // Code editor (startup appropriate)
+      // Code editor
       ctx.fillStyle = '#1e1e2e';
       ctx.fillRect(x + 8, y, 18, 12);
       const codeColors = ['#cba6f7', '#89b4fa', '#a6e3a1', '#f38ba8'];
@@ -1025,16 +1077,12 @@ function drawCouchTV(
         ctx.fillRect(x + 9 + (i % 2) * 5, y + 2 + i * 3, w2, 1);
       }
     }
-    // Screen glow on couch
-    const glow = Math.sin(t / 1500) * 0.05 + 0.08;
-    ctx.fillStyle = `rgba(100,150,255,${glow})`;
-    ctx.fillRect(x + 1, y + TILE + 4, 32, 8);
   } else {
+    // Screen off — dark with subtle reflection
     ctx.fillStyle = '#0a0a14';
     ctx.fillRect(x + 8, y, 18, 12);
-    ctx.fillStyle = '#1a1a2e';
-    ctx.font = '4px monospace';
-    ctx.fillText('NETFLIX', x + 10, y + 8);
+    ctx.fillStyle = 'rgba(255,255,255,0.03)';
+    ctx.fillRect(x + 9, y + 1, 8, 3);
   }
 
   // TV stand
@@ -1042,6 +1090,47 @@ function drawCouchTV(
   ctx.fillRect(x + 15, y + 14, 4, 3);
   ctx.fillStyle = '#3a3a42';
   ctx.fillRect(x + 13, y + 16, 8, 2);
+
+  // Area rug — drawn after TV stand so it appears in front
+  ctx.fillStyle = '#3a2a1a';
+  ctx.fillRect(x, y + TILE, 36, 14);
+  ctx.fillStyle = '#4a3525';
+  ctx.fillRect(x + 1, y + TILE + 1, 34, 12);
+  ctx.fillStyle = '#5a4535';
+  for (let i = 0; i < 4; i++) {
+    ctx.fillRect(x + 4 + i * 8, y + TILE + 4, 4, 4);
+  }
+
+  // Couch — drawn last, appears in front of TV and rug
+  ctx.fillStyle = '#4a5568';
+  ctx.fillRect(x, y + TILE + 4, 34, 10);
+  ctx.fillStyle = '#5a6678';
+  ctx.fillRect(x + 1, y + TILE + 4, 32, 8);
+  // Cushions
+  ctx.fillStyle = '#6a7688';
+  ctx.fillRect(x + 2, y + TILE + 5, 14, 6);
+  ctx.fillRect(x + 18, y + TILE + 5, 14, 6);
+  ctx.fillStyle = 'rgba(255,255,255,0.1)';
+  ctx.fillRect(x + 3, y + TILE + 5, 8, 2);
+  ctx.fillRect(x + 19, y + TILE + 5, 8, 2);
+  // Armrests
+  ctx.fillStyle = '#4a5568';
+  ctx.fillRect(x, y + TILE + 3, 3, 11);
+  ctx.fillRect(x + 31, y + TILE + 3, 3, 11);
+  ctx.fillStyle = '#5a6678';
+  ctx.fillRect(x, y + TILE + 3, 3, 2);
+  ctx.fillRect(x + 31, y + TILE + 3, 3, 2);
+  // Legs
+  ctx.fillStyle = '#3a2a1a';
+  ctx.fillRect(x + 2, y + TILE + 13, 3, 2);
+  ctx.fillRect(x + 29, y + TILE + 13, 3, 2);
+
+  // Screen glow on couch cushions (active only, after couch is drawn)
+  if (active) {
+    const glow = Math.sin(t / 1500) * 0.05 + 0.08;
+    ctx.fillStyle = `rgba(100,150,255,${glow})`;
+    ctx.fillRect(x + 1, y + TILE + 4, 32, 8);
+  }
 
   // Remote on armrest
   ctx.fillStyle = '#2a2a3a';
@@ -1055,13 +1144,27 @@ function drawCouchTV(
 // ─── Area Rug ────────────────────────────────────────────────────────────────
 
 function drawAreaRug(ctx: CanvasRenderingContext2D, x: number, y: number): void {
-  ctx.fillStyle = 'rgba(100,60,20,0.25)';
-  ctx.fillRect(x, y, TILE * 4, TILE * 2);
-  ctx.fillStyle = 'rgba(150,80,30,0.15)';
-  ctx.fillRect(x + 2, y + 2, TILE * 4 - 4, TILE * 2 - 4);
-  // Simple pattern
-  ctx.fillStyle = 'rgba(200,120,40,0.12)';
-  ctx.fillRect(x + 4, y + 4, TILE * 4 - 8, TILE * 2 - 8);
+  const W = TILE * 4;
+  const H = TILE * 2;
+  // Rug base — warm rust red, visible on teal floor
+  ctx.fillStyle = 'rgba(160,60,40,0.38)';
+  ctx.fillRect(x, y, W, H);
+  // Border
+  ctx.fillStyle = 'rgba(200,90,50,0.28)';
+  ctx.fillRect(x + 2, y + 2, W - 4, H - 4);
+  // Inner field
+  ctx.fillStyle = 'rgba(120,40,20,0.22)';
+  ctx.fillRect(x + 4, y + 4, W - 8, H - 8);
+  // Diamond pattern
+  ctx.fillStyle = 'rgba(220,140,80,0.2)';
+  ctx.fillRect(x + W / 2 - 3, y + 4, 6, H - 8);
+  ctx.fillRect(x + 4, y + H / 2 - 2, W - 8, 4);
+  // Corner accents
+  ctx.fillStyle = 'rgba(240,180,100,0.22)';
+  ctx.fillRect(x + 4, y + 4, 4, 4);
+  ctx.fillRect(x + W - 8, y + 4, 4, 4);
+  ctx.fillRect(x + 4, y + H - 8, 4, 4);
+  ctx.fillRect(x + W - 8, y + H - 8, 4, 4);
 }
 
 // ─── Workstation ─────────────────────────────────────────────────────────────

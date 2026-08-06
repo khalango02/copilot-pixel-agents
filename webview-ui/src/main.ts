@@ -67,6 +67,12 @@ document.addEventListener('DOMContentLoaded', () => {
   inspector.style.display = 'none';
   bottomPanel.appendChild(inspector);
 
+  // Agent modal — large overlay panel on canvas (right side)
+  const agentModal = document.createElement('div');
+  agentModal.id = 'agent-modal';
+  agentModal.style.display = 'none';
+  canvasWrap.appendChild(agentModal);
+
   // Create office (sets up click handler)
   const office = createOffice(canvas);
 
@@ -91,13 +97,20 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   syncEmptyOverlay();
 
-  // ── Inspector logic ──────────────────────────────────────────────────────
+  const closeModal = () => {
+    agentModal.style.display = 'none';
+    inspector.style.display = 'none';
+    for (const c of office.characters.values()) c.selected = false;
+    renderAgentsStrip(agentsStrip, office);
+  };
+
+  // ── Inspector / modal logic ──────────────────────────────────────────────
   office.onCharacterClick = (id: string) => {
-    if (!id) { inspector.style.display = 'none'; return; }
+    if (!id) { closeModal(); return; }
     const char = office.characters.get(id);
     if (!char) return;
-    inspector.style.display = 'block';
-    renderInspector(inspector, char);
+    agentModal.style.display = 'flex';
+    renderAgentModal(agentModal, char, closeModal);
     renderAgentsStrip(agentsStrip, office, id);
   };
 
@@ -124,14 +137,16 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'agentRemoved':
         removeCharacter(office, msg.id);
         syncEmptyOverlay();
-        inspector.style.display = 'none';
+        closeModal();
         renderAgentsStrip(agentsStrip, office);
         break;
 
       case 'agentToolStart': {
         onToolStart(office, msg.id, msg.toolId, msg.toolName, msg.status);
         const sel = selectedChar(office);
-        if (sel?.id === msg.id) renderInspector(inspector, sel);
+        if (sel?.id === msg.id && agentModal.style.display !== 'none') {
+          renderAgentModal(agentModal, sel, closeModal);
+        }
         renderAgentsStrip(agentsStrip, office, sel?.id);
         break;
       }
@@ -139,7 +154,9 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'agentToolDone': {
         onToolDone(office, msg.id, msg.toolId);
         const sel = selectedChar(office);
-        if (sel?.id === msg.id) renderInspector(inspector, sel);
+        if (sel?.id === msg.id && agentModal.style.display !== 'none') {
+          renderAgentModal(agentModal, sel, closeModal);
+        }
         renderAgentsStrip(agentsStrip, office, sel?.id);
         break;
       }
@@ -148,7 +165,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (msg.status === 'waiting') setWaiting(office, msg.id);
         else if (msg.status === 'idle') setIdle(office, msg.id);
         const sel = selectedChar(office);
-        if (sel?.id === msg.id) renderInspector(inspector, sel);
+        if (sel?.id === msg.id && agentModal.style.display !== 'none') {
+          renderAgentModal(agentModal, sel, closeModal);
+        }
         renderAgentsStrip(agentsStrip, office, sel?.id);
         break;
       }
@@ -157,7 +176,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const c = office.characters.get(msg.id);
         if (c) { c.inputTokens = msg.inputTokens; c.outputTokens = msg.outputTokens; }
         const sel = selectedChar(office);
-        if (sel?.id === msg.id) renderInspector(inspector, sel);
+        if (sel?.id === msg.id && agentModal.style.display !== 'none') {
+          renderAgentModal(agentModal, sel, closeModal);
+        }
         break;
       }
     }
@@ -188,56 +209,79 @@ function renderAgentsStrip(
     chip.addEventListener('click', () => {
       for (const ch of office.characters.values()) ch.selected = false;
       c.selected = true;
-      const inspector = document.getElementById('inspector')!;
-      inspector.style.display = 'block';
-      renderInspector(inspector, c);
+      const modal = document.getElementById('agent-modal') as HTMLElement;
+      const closeModalFn = () => {
+        modal.style.display = 'none';
+        for (const ch of office.characters.values()) ch.selected = false;
+        renderAgentsStrip(container, office);
+      };
+      if (modal) {
+        modal.style.display = 'flex';
+        renderAgentModal(modal, c, closeModalFn);
+      }
       renderAgentsStrip(container, office, c.id);
     });
     container.appendChild(chip);
   }
 }
 
-function renderInspector(container: HTMLElement, char: Character): void {
+function renderAgentModal(container: HTMLElement, char: Character, onClose: () => void): void {
   const dur = Math.round((Date.now() - char.sessionStartedAt) / 1000);
   const durStr = dur < 60 ? `${dur}s` : `${Math.floor(dur / 60)}m ${dur % 60}s`;
 
   const activeHtml = [...char.activeTools.values()]
-    .map((t) => `<span class="active-tool ${t.status}">${statusIcon(t.status)} ${esc(t.name)}</span>`)
-    .join('') || '—';
+    .map((t) => `<div class="modal-tool ${t.status}">${statusIcon(t.status)} ${esc(t.name)}</div>`)
+    .join('') || '<span class="modal-empty">—</span>';
 
-  const histHtml = char.toolHistory.slice(0, 12)
+  const histHtml = char.toolHistory
     .map((e) => {
-      const ms = e.finishedAt ? `${e.finishedAt - e.startedAt}ms` : `<span class="history-running">…</span>`;
-      return `<div class="history-entry">
-        <span class="history-icon">${statusIcon(e.status)}</span>
-        <span class="history-name" title="${esc(e.toolName)}">${esc(shortName(e.toolName))}</span>
-        <span class="history-time">${ms}</span>
+      const ms = e.finishedAt
+        ? `${e.finishedAt - e.startedAt}ms`
+        : '<span class="modal-running">…</span>';
+      return `<div class="modal-hist-entry">
+        <span class="modal-hist-icon">${statusIcon(e.status)}</span>
+        <span class="modal-hist-name" title="${esc(e.toolName)}">${esc(e.toolName)}</span>
+        <span class="modal-hist-dur">${ms}</span>
+        <span class="modal-hist-ago">${fmtAgo(e.startedAt)}</span>
       </div>`;
-    }).join('') || '<div class="history-empty">No tools yet</div>';
+    }).join('') || '<div class="modal-empty">No tools yet</div>';
 
   container.innerHTML = `
-    <div class="inspector-header">
-      <span class="inspector-name">${esc(char.name)}</span>
-      <button class="inspector-close" id="inspector-close-btn">✕</button>
+    <div class="modal-header">
+      <div class="modal-title-row">
+        <div class="modal-dot ${char.activity}"></div>
+        <span class="modal-name">${esc(char.name)}</span>
+        <button class="modal-close" id="modal-close-btn">✕</button>
+      </div>
+      <div class="modal-status">${actLabel(char.activity)}</div>
     </div>
-    <div class="inspector-stats">
-      <div class="stat"><span class="stat-label">Status</span><span class="stat-value ${char.activity}">${actLabel(char.activity)}</span></div>
-      <div class="stat"><span class="stat-label">Uptime</span><span class="stat-value">${durStr}</span></div>
-      <div class="stat"><span class="stat-label">In</span><span class="stat-value">${fmt(char.inputTokens)}</span></div>
-      <div class="stat"><span class="stat-label">Out</span><span class="stat-value">${fmt(char.outputTokens)}</span></div>
+    <div class="modal-stats">
+      <div class="modal-stat-card">
+        <span class="modal-stat-label">Uptime</span>
+        <span class="modal-stat-val">${durStr}</span>
+      </div>
+      <div class="modal-stat-card">
+        <span class="modal-stat-label">Input</span>
+        <span class="modal-stat-val">${fmt(char.inputTokens)}</span>
+      </div>
+      <div class="modal-stat-card">
+        <span class="modal-stat-label">Output</span>
+        <span class="modal-stat-val">${fmt(char.outputTokens)}</span>
+      </div>
+      <div class="modal-stat-card">
+        <span class="modal-stat-label">Tools</span>
+        <span class="modal-stat-val">${char.toolHistory.length}</span>
+      </div>
     </div>
-    <div class="inspector-row-title">Active</div>
-    <div class="active-tools">${activeHtml}</div>
-    <div class="inspector-row-title">History</div>
-    <div class="history-list">${histHtml}</div>
+    <div class="modal-section-title">Active</div>
+    <div class="modal-active-tools">${activeHtml}</div>
+    <div class="modal-section-title">History</div>
+    <div class="modal-history">${histHtml}</div>
   `;
 
-  document.getElementById('inspector-close-btn')?.addEventListener('click', (e) => {
+  document.getElementById('modal-close-btn')?.addEventListener('click', (e) => {
     e.stopPropagation();
-    container.style.display = 'none';
-    for (const ch of (window as any).__office?.characters?.values() ?? []) {
-      (ch as Character).selected = false;
-    }
+    onClose();
   });
 }
 
@@ -257,9 +301,10 @@ function esc(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-function shortName(name: string): string {
-  const n = name.replace(/([A-Z])/g, ' $1').trim();
-  return n.length > 18 ? n.slice(0, 17) + '…' : n;
+function fmtAgo(ts: number): string {
+  const s = Math.round((Date.now() - ts) / 1000);
+  if (s < 60) return `${s}s ago`;
+  return `${Math.floor(s / 60)}m ago`;
 }
 
 function actLabel(a: string): string {
