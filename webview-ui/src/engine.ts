@@ -24,6 +24,7 @@ const IDLE_WANDER_MS = 10_000;      // after this long idle, consider leisure
 const LEISURE_MIN_MS = 15_000;      // minimum time at leisure spot
 const LEISURE_MAX_MS = 35_000;      // maximum time at leisure spot
 const LEISURE_CHANCE = 0.45;        // probability of picking leisure vs staying at desk
+const CHAR_MIN_SEPARATION = 20;     // min px between characters — prevents sprite stacking while wandering
 
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -441,11 +442,17 @@ function updateIdleBehavior(
 
   // Random idle wander at desk
   if (c.activity === 'idle' && c.idleGoal === null && Math.random() < 0.0003) {
-    const wx = TILE + Math.floor(Math.random() * maxX);
-    const wy = floorStartY + TILE + Math.floor(Math.random() * Math.max(1, maxY - floorStartY));
-    c.targetX = wx;
-    c.targetY = wy;
-    c.activity = 'walking';
+    let wx = 0, wy = 0, found = false;
+    for (let i = 0; i < 8; i++) {
+      wx = TILE + Math.floor(Math.random() * maxX);
+      wy = floorStartY + TILE + Math.floor(Math.random() * Math.max(1, maxY - floorStartY));
+      if (!tooCloseToOtherCharacters(office, wx, wy, c.id)) { found = true; break; }
+    }
+    if (found) {
+      c.targetX = wx;
+      c.targetY = wy;
+      c.activity = 'walking';
+    }
     return;
   }
 
@@ -476,6 +483,20 @@ function freeSpotsFor(office: Office, agentId: string): void {
   for (const spot of office.leisureSpots) {
     if (spot.occupant === agentId) spot.occupant = null;
   }
+}
+
+// Checks candidate point against every other character's current (or, if walking, target)
+// position so idle wandering never sends two agents to the same spot on screen.
+function tooCloseToOtherCharacters(office: Office, x: number, y: number, excludeId: string): boolean {
+  for (const other of office.characters.values()) {
+    if (other.id === excludeId) continue;
+    const ox = other.activity === 'walking' ? other.targetX : other.x;
+    const oy = other.activity === 'walking' ? other.targetY : other.y;
+    const dx = x - ox;
+    const dy = y - oy;
+    if (dx * dx + dy * dy < CHAR_MIN_SEPARATION * CHAR_MIN_SEPARATION) return true;
+  }
+  return false;
 }
 
 function furnitureZones(office: Office): Array<{ x: number; y: number; w: number; h: number }> {
