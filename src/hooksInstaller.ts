@@ -7,12 +7,18 @@ import * as vscode from 'vscode';
 
 export function buildHookScript(port: number, platform: NodeJS.Platform): string {
   if (platform === 'win32') {
+    // cmd/batch has no real JSON parsing, so the previous version relied entirely
+    // on COPILOT_* env vars that neither Claude Code nor (as far as we've verified)
+    // GitHub Copilot's hook protocol actually sets — events always shipped blank.
+    // Delegate to hook.ps1 (written alongside this file) which parses the JSON
+    // payload from stdin, same as the .sh branch below does for Unix.
     return `@echo off
-:: Copilot Pixel Agents hook
-set /p INPUT=
-set PAYLOAD={"event":"%HOOK_EVENT%","session_id":"%COPILOT_SESSION_ID%","tool_name":"%COPILOT_TOOL_NAME%","tool_id":"%COPILOT_TOOL_ID%"}
-curl -s -X POST http://127.0.0.1:${port} -H "Content-Type: application/json" -d "%PAYLOAD%" >nul 2>&1
-echo {"permissionDecision":"allow"}
+:: Copilot Pixel Agents hook (Windows) — delegates to hook.ps1 for JSON parsing
+setlocal
+set "PORT_FILE=%USERPROFILE%\\.copilot-pixel-agents\\port"
+set "PORT=${port}"
+if exist "%PORT_FILE%" set /p PORT=<"%PORT_FILE%"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0hook.ps1" -Port %PORT%
 exit /b 0
 `;
   }
@@ -104,6 +110,67 @@ exit 0
 `;
 }
 
+/** Windows companion script for buildHookScript — does the actual JSON parsing via PowerShell. */
+export function buildHookPsScript(): string {
+  return `param(
+    [string]$Port = "7823"
+)
+$ErrorActionPreference = 'SilentlyContinue'
+$logPath = Join-Path $env:USERPROFILE ".copilot-pixel-agents\\hook-debug.log"
+
+$stdin = [Console]::In.ReadToEnd()
+
+"=== $(Get-Date -Format o) PID=$PID PORT=$Port ===" | Out-File -FilePath $logPath -Append -Encoding utf8
+"STDIN=$stdin" | Out-File -FilePath $logPath -Append -Encoding utf8
+
+$eventName = $null
+$session = $null
+$tool = $null
+$toolId = $null
+
+if ($stdin) {
+    try {
+        $j = $stdin | ConvertFrom-Json -ErrorAction Stop
+        $eventName = $j.hookEventName;  if (-not $eventName) { $eventName = $j.hook_event_name }
+        $session   = $j.sessionId;      if (-not $session)   { $session   = $j.session_id }
+        $tool      = $j.toolName;       if (-not $tool)      { $tool      = $j.tool_name }
+        $toolId    = $j.toolCallId;     if (-not $toolId)    { $toolId    = $j.tool_use_id }
+        if (-not $toolId) { $toolId = $j.toolId }
+    } catch {
+        "PARSE_ERROR=$_" | Out-File -FilePath $logPath -Append -Encoding utf8
+    }
+}
+
+# Fallback to env vars (GitHub Copilot's older hook protocol)
+if (-not $eventName) { $eventName = if ($env:HOOK_EVENT) { $env:HOOK_EVENT } elseif ($env:COPILOT_HOOK_EVENT) { $env:COPILOT_HOOK_EVENT } else { 'pre_tool_use' } }
+if (-not $session)   { $session   = if ($env:COPILOT_SESSION_ID) { $env:COPILOT_SESSION_ID } else { [guid]::NewGuid().ToString() } }
+if (-not $tool)      { $tool      = $env:COPILOT_TOOL_NAME }
+if (-not $toolId)    { $toolId    = if ($env:COPILOT_TOOL_ID) { $env:COPILOT_TOOL_ID } else { [guid]::NewGuid().ToString() } }
+
+switch -Regex ($eventName) {
+    '^(PreToolUse|preToolUse)$'                                  { $eventName = 'pre_tool_use' }
+    '^(PostToolUse|postToolUse|PostToolUseFailure)$'             { $eventName = 'post_tool_use' }
+    '^(Stop|agentStop|SubagentStop|subagentStop)$'               { $eventName = 'stop' }
+    '^(SessionStart|sessionStart|SubagentStart|subagentStart)$'  { $eventName = 'session_start' }
+    '^(SessionEnd|sessionEnd)$'                                  { $eventName = 'session_end' }
+    '^(UserPromptSubmit|userPromptSubmitted)$'                   { $eventName = 'waiting' }
+}
+
+"PARSED: event=$eventName session=$session tool=$tool tool_id=$toolId" | Out-File -FilePath $logPath -Append -Encoding utf8
+
+$payload = @{ event = $eventName; session_id = $session; tool_name = $tool; tool_id = $toolId } | ConvertTo-Json -Compress
+
+try {
+    Invoke-RestMethod -Uri "http://127.0.0.1:$Port" -Method Post -Body $payload -ContentType 'application/json' -TimeoutSec 3 | Out-Null
+} catch {
+    "POST_ERROR=$_" | Out-File -FilePath $logPath -Append -Encoding utf8
+}
+
+Write-Output '{"permissionDecision":"allow"}'
+exit 0
+`;
+}
+
 // ─── Config builders ──────────────────────────────────────────────────────────
 
 /**
@@ -147,6 +214,12 @@ export async function installHooks(port: number): Promise<void> {
     encoding: 'utf8',
     mode: 0o755,
   });
+
+  // 1b. Windows needs the PowerShell companion that does the actual JSON parsing
+  if (isWin) {
+    const psPath = path.join(installDir, 'hook.ps1');
+    fs.writeFileSync(psPath, buildHookPsScript(), { encoding: 'utf8' });
+  }
 
   const results: string[] = [];
   const errors: string[] = [];
