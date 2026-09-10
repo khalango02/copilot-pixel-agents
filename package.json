@@ -65,6 +65,12 @@
           "type": "boolean",
           "default": false,
           "description": "Automatically show the pixel office panel on startup"
+        },
+        "copilotPixelAgents.captureTaskDetails": {
+          "type": "boolean",
+          "default": false,
+          "scope": "window",
+          "markdownDescription": "Keep tool inputs, outputs and errors received from hooks in memory for the task inspector. May contain source code or sensitive information; automatic redaction is best-effort. Disabled by default. Turning this off clears captured details. Reinstall Pixel Agents hooks after upgrading to support payload capture. This does not access VS Code chat debug logs or model reasoning."
         }
       }
     }
@@ -78,6 +84,8 @@
   },
   "homepage": "https://github.com/khalango02/copilot-pixel-agents#readme",
   "scripts": {
+    "test": "node --test tests/*.test.mjs && npm --prefix webview-ui test",
+    "typecheck": "tsc --noEmit && npm --prefix webview-ui run typecheck",
     "build": "node esbuild.js",
     "build:webview": "cd webview-ui && npm run build",
     "dev": "node esbuild.js --watch",

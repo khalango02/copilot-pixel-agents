@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit --strict --target ES2022 --module ESNext --moduleResolution bundler --lib ES2022,DOM src/main.ts src/isometric.ts"
   },
   "devDependencies": {
+    "jsdom": "^26.1.0",
     "typescript": "^5.7.0",
     "vite": "^6.0.0"
   }

@@ -1,5 +1,26 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- Animated seated poses at computers, gaming seats and TV couches, with 300 ms sit/stand transitions, articulated limbs and posture-aware selection.
+- Clickable task history with Input, Output, Error and Event tabs, live completion updates, keyboard navigation and explicit missing/truncated/unmatched states.
+- Opt-in `copilotPixelAgents.captureTaskDetails` setting (off by default), bounded in-memory tool payload retention, best-effort secret masking and immediate purge when disabled.
+- Backend tests for normalization, validation, HTTP limits, hook transport and correlation; DOM tests for inspector interaction, accessibility and untrusted content.
+
+### Changed
+- Agents stand up before walking back from leisure to their workstation; coffee remains a standing activity.
+- Task history is retained in the extension host (50 entries per agent) and restored with session metadata when the webview is recreated. Stop marks pending invocations interrupted.
+- Generated Unix/Windows scripts serialize allowlisted tool arguments, results and errors safely, preserve failure outcomes, enforce transport limits and avoid proxy/redirect forwarding.
+- Hook registration adds failure/session-end/waiting events and upgrades owned entries while preserving unrelated hooks. **Reinstall hooks after upgrading.**
+- Removed raw stdin/environment logging from newly generated hooks; existing legacy logs are not deleted. The HTTP handler rejects malformed/oversized requests without logging their contents.
+- Refreshed README with current behavior, privacy limits, migration, testing and the distinction between hook inspection and VS Code internal chat debugging.
+- Updated transitive webview development dependencies to resolve the audit findings in nanoid/PostCSS.
+
+### Fixed
+- Tool history correlation now uses invocation IDs and avoids guessing matches by tool name; duplicate correlated start/completion events do not create duplicate entries.
+- Waiting/idle UI transitions no longer retain stale typing indicators; low seat backs and character overlays follow seated geometry.
+
 ## [0.5.0] — 2026-09-10 (current)
 
 ### Added

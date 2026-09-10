@@ -203,7 +203,7 @@ button:focus-visible, .agent-chip:focus-visible { outline: 2px solid #a9dacb; ou
 #agent-modal {
   position: absolute;
   top: 0; right: 0;
-  width: min(300px, 92%);
+  width: min(440px, 96%);
   height: 100%;
   background: rgba(24, 24, 37, 0.97);
   border-left: 1px solid #585b70;
@@ -301,6 +301,40 @@ button:focus-visible, .agent-chip:focus-visible { outline: 2px solid #a9dacb; ou
   align-items: center; gap: 5px;
   font-size: 9px; padding: 3px 5px;
   background: #1e1e2e; border-radius: 3px;
+  border: 1px solid #35435a; color: #dce6ef; text-align: left;
+  cursor: pointer; font-family: inherit; min-height: 32px;
+}
+.modal-hist-entry:hover { background: #2b3b53; border-color: #809bb8; }
+.modal-hist-entry:focus-visible { outline: 2px solid #a9dacb; outline-offset: -2px; }
+.history-hint { padding: 2px 12px 6px; font-size: 10px; color: #acbbce; }
+.capture-settings-link { border: 0; background: none; text-align: left; padding: 4px 12px 10px; color: #a9c9f4; cursor: pointer; font-size: 10px; }
+.task-header { padding: 12px; background: #1c2a40; border-bottom: 1px solid #3e5069; }
+.task-navigation { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 16px; }
+.task-button { border: 1px solid #475a73; border-radius: 6px; padding: 6px 9px; background: #293950; color: #dfebf6; cursor: pointer; font: inherit; }
+.task-button:hover { background: #394e6b; }
+.task-eyebrow { font-size: 9px; color: #a1b8cf; letter-spacing: .06em; overflow-wrap: anywhere; }
+.task-title { font-size: 16px; margin: 6px 0 10px; color: #dfd3f7; overflow-wrap: anywhere; }
+.task-summary { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: #aabdd3; font-size: 10px; }
+.task-outcome.running { color: #eed18e; }
+.task-outcome.completed { color: #a0d8b7; }
+.task-outcome.failed { color: #f2a0aa; }
+.task-outcome.interrupted { color: #c0b1e6; }
+.task-notice, .task-warning { padding: 10px 12px; font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
+.task-notice { color: #b3c3d6; background: #18263a; }
+.task-warning { color: #efd4a0; background: #483e2e; border-left: 2px solid #c9a86a; }
+.task-capture { margin: 8px 12px; align-self: flex-start; font-size: 10px; }
+.task-tabs { display: flex; padding: 0 12px; gap: 4px; border-bottom: 1px solid #475a73; }
+.task-tabs .task-button { flex: 1; border-radius: 6px 6px 0 0; border-bottom: 0; }
+.task-tabs [aria-selected="true"] { background: #415670; color: #b9ecd9; box-shadow: inset 0 -2px #a1d9c3; }
+.task-content { flex: 1; min-height: 0; overflow: auto; background: #101b2b; padding: 12px; }
+.task-json { font: 11px/1.6 var(--vscode-editor-font-family, monospace); color: #d6e2ef; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; tab-size: 2; }
+.task-empty { color: #b8c6d7; font-size: 11px; line-height: 1.7; }
+#agent-modal.showing-task > :not(.task-content) { flex-shrink: 0; }
+@media (max-height: 450px) {
+  .task-header { padding: 6px 12px; }
+  .task-navigation { margin-bottom: 4px; }
+  .task-title { margin: 3px 0; }
+  .task-notice { padding: 4px 12px; }
 }
 .modal-hist-icon { font-size: 10px; }
 .modal-hist-name {

@@ -1,12 +1,51 @@
 import { EventEmitter } from 'events';
-import type { AgentState, HookEvent, ToolStatus } from './types.js';
+import { randomUUID } from 'crypto';
+import type { AgentSnapshot, AgentState, HookEvent, TaskDetails, ToolHistoryEntry } from './types.js';
 import { toolNameToStatus } from './types.js';
+import { sanitizeDetails } from './taskDetails.js';
 
-const AGENT_IDLE_TIMEOUT_MS = 30_000;
+export const MAX_TOOL_HISTORY = 50;
+
+function copyEntry(entry: ToolHistoryEntry): ToolHistoryEntry {
+  return { ...entry, ...(entry.details ? { details: {
+    ...(entry.details.input ? { input: { ...entry.details.input } } : {}),
+    ...(entry.details.output ? { output: { ...entry.details.output } } : {}),
+    ...(entry.details.error ? { error: { ...entry.details.error } } : {}),
+  } } : {}) };
+}
 
 export class AgentStore extends EventEmitter {
   private agents = new Map<string, AgentState>();
   private idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private captureDetails: boolean;
+
+  constructor(options: { captureTaskDetails?: boolean } = {}) {
+    super();
+    this.captureDetails = options.captureTaskDetails === true;
+  }
+
+  get captureTaskDetails(): boolean { return this.captureDetails; }
+
+  setCaptureTaskDetails(enabled: boolean): void {
+    this.captureDetails = enabled === true;
+    // Always purge on disable, including pending entries, before notifying consumers.
+    if (!enabled) {
+      for (const agent of this.agents.values()) {
+        for (const entry of agent.toolHistory) delete entry.details;
+        this.emitHistory(agent);
+      }
+    }
+    this.emit('captureSettings', enabled);
+  }
+
+  getSnapshots(): AgentSnapshot[] {
+    return this.getAll().map((agent) => ({
+      id: agent.id, name: agent.name, sessionStartedAt: agent.sessionStartedAt,
+      inputTokens: agent.inputTokens, outputTokens: agent.outputTokens, isWaiting: agent.isWaiting,
+      activeTools: [...agent.activeTools].map(([id, tool]) => [id, { ...tool }]),
+      toolHistory: agent.toolHistory.map(copyEntry),
+    }));
+  }
 
   get(id: string): AgentState | undefined {
     return this.agents.get(id);
@@ -25,10 +64,10 @@ export class AgentStore extends EventEmitter {
         this.removeAgent(hookEvent.session_id);
         break;
       case 'pre_tool_use':
-        this.onToolStart(hookEvent.session_id, hookEvent.tool_id, hookEvent.tool_name);
+        this.onToolStart(hookEvent.session_id, hookEvent.tool_id, hookEvent.tool_name, hookEvent.details);
         break;
       case 'post_tool_use':
-        this.onToolDone(hookEvent.session_id, hookEvent.tool_id);
+        this.onToolDone(hookEvent.session_id, hookEvent.tool_id, hookEvent.success, hookEvent.tool_name, hookEvent.details);
         break;
       case 'waiting':
         this.onWaiting(hookEvent.session_id);
@@ -53,6 +92,7 @@ export class AgentStore extends EventEmitter {
       lastEventAt: Date.now(),
       inputTokens: 0,
       outputTokens: 0,
+      toolHistory: [],
     };
     this.agents.set(id, agent);
     this.emit('agentCreated', agent);
@@ -60,6 +100,7 @@ export class AgentStore extends EventEmitter {
 
   private removeAgent(id: string): void {
     if (!this.agents.has(id)) return;
+    this.onStop(id);
     clearTimeout(this.idleTimers.get(id));
     this.idleTimers.delete(id);
     this.agents.delete(id);
@@ -73,22 +114,84 @@ export class AgentStore extends EventEmitter {
     return this.agents.get(id)!;
   }
 
-  private onToolStart(agentId: string, toolId: string, toolName: string): void {
-    const agent = this.ensureAgent(agentId);
-    this.cancelIdleTimer(agentId);
-    const status: ToolStatus = toolNameToStatus(toolName);
-    agent.activeTools.set(toolId, { name: toolName, status });
-    agent.isWaiting = false;
-    agent.lastEventAt = Date.now();
-    this.emit('agentToolStart', agentId, toolId, toolName, status);
+  private mergeDetails(entry: ToolHistoryEntry, details?: TaskDetails): void {
+    const clean = this.captureDetails ? sanitizeDetails(details) : undefined;
+    if (clean) entry.details = { ...entry.details, ...clean };
+    if (!this.captureDetails) delete entry.details;
   }
 
-  private onToolDone(agentId: string, toolId: string): void {
-    const agent = this.agents.get(agentId);
-    if (!agent) return;
-    agent.activeTools.delete(toolId);
+  private pending(agent: AgentState, toolId?: string): ToolHistoryEntry | undefined {
+    // Never correlate by name or a synthetic/missing ID, even with a single active tool.
+    return toolId ? agent.toolHistory.find((entry) => !entry.unmatched && entry.toolId === toolId && entry.outcome === 'running') : undefined;
+  }
+
+  private newEntry(toolId: string | undefined, toolName: string, unmatched = !toolId): ToolHistoryEntry {
+    const entryId = randomUUID();
+    return {
+      entryId, toolId: toolId || `unmatched:${entryId}`, toolName,
+      status: toolNameToStatus(toolName), startedAt: Date.now(), outcome: 'running',
+      ...(unmatched ? { unmatched: true } : {}),
+    };
+  }
+
+  private appendEntry(agent: AgentState, entry: ToolHistoryEntry): void {
+    if (agent.toolHistory.length >= MAX_TOOL_HISTORY) {
+      const oldest = agent.toolHistory[0];
+      if (oldest.outcome === 'running') this.finishEntry(agent, oldest, 'interrupted');
+      agent.toolHistory.shift();
+    }
+    agent.toolHistory.push(entry);
+  }
+
+  private finishEntry(agent: AgentState, entry: ToolHistoryEntry, outcome: 'completed' | 'failed' | 'interrupted'): void {
+    entry.outcome = outcome;
+    entry.finishedAt = Date.now();
+    agent.activeTools.delete(entry.toolId);
+    this.emit('agentToolDone', agent.id, entry.toolId, copyEntry(entry));
+  }
+
+  private emitHistory(agent: AgentState): void {
+    this.emit('agentHistory', agent.id, agent.toolHistory.map(copyEntry));
+  }
+
+  private onToolStart(agentId: string, toolId: string | undefined, toolName: string, details?: TaskDetails): void {
+    const agent = this.ensureAgent(agentId);
+    this.cancelIdleTimer(agentId);
+    agent.isWaiting = false;
     agent.lastEventAt = Date.now();
-    this.emit('agentToolDone', agentId, toolId);
+    const existing = this.pending(agent, toolId);
+    if (existing) {
+      this.mergeDetails(existing, details);
+      this.emitHistory(agent);
+      return;
+    }
+    const entry = this.newEntry(toolId, toolName);
+    this.mergeDetails(entry, details);
+    this.appendEntry(agent, entry);
+    agent.activeTools.set(entry.toolId, { name: toolName, status: entry.status });
+    this.emit('agentToolStart', agentId, entry.toolId, toolName, entry.status, copyEntry(entry));
+  }
+
+  private onToolDone(agentId: string, toolId: string | undefined, success: boolean, toolName?: string, details?: TaskDetails): void {
+    const agent = this.ensureAgent(agentId);
+    let entry = this.pending(agent, toolId);
+    if (!entry) {
+      // Copilot can deliver the same hook through both registered directories.
+      // A new pre event with a reused ID still creates a distinct pending entry.
+      const completed = toolId ? [...agent.toolHistory].reverse().find((item) => item.toolId === toolId && !item.unmatched && item.outcome !== 'running') : undefined;
+      if (completed) {
+        this.mergeDetails(completed, details);
+        if (success === false && completed.outcome === 'completed') completed.outcome = 'failed';
+        this.emitHistory(agent);
+        return;
+      }
+      entry = this.newEntry(toolId, toolName || 'Unknown tool', true);
+      this.appendEntry(agent, entry);
+    }
+    this.mergeDetails(entry, details);
+    agent.lastEventAt = Date.now();
+    // Outcome is normalized before capture gating; e.g. error:false is not failure.
+    this.finishEntry(agent, entry, success === false ? 'failed' : 'completed');
     if (agent.activeTools.size === 0) {
       this.scheduleIdleTimer(agentId);
     }
@@ -105,9 +208,13 @@ export class AgentStore extends EventEmitter {
   private onStop(agentId: string): void {
     const agent = this.agents.get(agentId);
     if (!agent) return;
+    for (const entry of agent.toolHistory) {
+      if (entry.outcome === 'running') this.finishEntry(agent, entry, 'interrupted');
+    }
     agent.activeTools.clear();
     agent.isWaiting = false;
     agent.lastEventAt = Date.now();
+    this.emitHistory(agent);
     this.emit('agentStatus', agentId, 'idle');
     this.scheduleIdleTimer(agentId);
   }
@@ -123,8 +230,10 @@ export class AgentStore extends EventEmitter {
   private scheduleIdleTimer(agentId: string): void {
     this.cancelIdleTimer(agentId);
     const timer = setTimeout(() => {
+      this.idleTimers.delete(agentId);
       this.emit('agentStatus', agentId, 'idle');
     }, 2000);
+    timer.unref();
     this.idleTimers.set(agentId, timer);
   }
 

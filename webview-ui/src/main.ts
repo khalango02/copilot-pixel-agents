@@ -11,13 +11,16 @@ import {
   setOfficeZoom,
   setWaiting,
   startLoop,
+  syncHistory,
 } from './engine.js';
 import type { Character } from './engine.js';
 import type { ClientMessage, ServerMessage } from './types.js';
+import { outcomeLabel, renderTaskInspector } from './taskInspector.js';
 
 declare const acquireVsCodeApi: () => { postMessage: (msg: ClientMessage) => void };
 const vscode = acquireVsCodeApi();
 function post(msg: ClientMessage): void { vscode.postMessage(msg); }
+let captureEnabled = false;
 
 // ─── Bootstrap ───────────────────────────────────────────────────────────────
 
@@ -135,6 +138,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const closeModal = () => {
     agentModal.style.display = 'none';
+    delete agentModal.dataset.taskId;
     inspector.style.display = 'none';
     for (const c of office.characters.values()) c.selected = false;
     renderAgentsStrip(agentsStrip, office);
@@ -159,7 +163,17 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
 
       case 'existingAgents':
-        for (const a of msg.agents) addCharacter(office, a.id, a.name);
+        for (const a of msg.agents) {
+          addCharacter(office, a.id, a.name);
+          const c = office.characters.get(a.id)!;
+          c.sessionStartedAt = a.sessionStartedAt ?? c.sessionStartedAt;
+          c.inputTokens = a.inputTokens ?? 0;
+          c.outputTokens = a.outputTokens ?? 0;
+          // Restore simulation independently of history, never replay old animations.
+          for (const [toolId, tool] of a.activeTools ?? []) onToolStart(office, a.id, toolId, tool.name, tool.status);
+          if (a.isWaiting) setWaiting(office, a.id);
+          syncHistory(office, a.id, a.toolHistory ?? []);
+        }
         syncEmptyOverlay();
         renderAgentsStrip(agentsStrip, office);
         break;
@@ -178,7 +192,7 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
 
       case 'agentToolStart': {
-        onToolStart(office, msg.id, msg.toolId, msg.toolName, msg.status);
+        onToolStart(office, msg.id, msg.toolId, msg.toolName, msg.status, msg.entry);
         const sel = selectedChar(office);
         if (sel?.id === msg.id && agentModal.style.display !== 'none') {
           renderAgentModal(agentModal, sel, closeModal);
@@ -188,7 +202,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       case 'agentToolDone': {
-        onToolDone(office, msg.id, msg.toolId);
+        onToolDone(office, msg.id, msg.toolId, msg.entry);
         const sel = selectedChar(office);
         if (sel?.id === msg.id && agentModal.style.display !== 'none') {
           renderAgentModal(agentModal, sel, closeModal);
@@ -205,6 +219,23 @@ document.addEventListener('DOMContentLoaded', () => {
           renderAgentModal(agentModal, sel, closeModal);
         }
         renderAgentsStrip(agentsStrip, office, sel?.id);
+        break;
+      }
+
+      case 'agentHistory': {
+        syncHistory(office, msg.id, msg.history);
+        const sel = selectedChar(office);
+        if (sel?.id === msg.id && agentModal.style.display !== 'none') renderAgentModal(agentModal, sel, closeModal);
+        break;
+      }
+
+      case 'captureSettings': {
+        captureEnabled = msg.enabled;
+        if (!captureEnabled) {
+          for (const c of office.characters.values()) for (const entry of c.toolHistory) delete entry.details;
+        }
+        const sel = selectedChar(office);
+        if (sel && agentModal.style.display !== 'none') renderAgentModal(agentModal, sel, closeModal);
         break;
       }
 
@@ -236,7 +267,8 @@ function renderAgentsStrip(
     return;
   }
   for (const c of office.characters.values()) {
-    const chip = document.createElement('div');
+    const chip = document.createElement('button');
+    chip.type = 'button';
     chip.className = 'agent-chip' + (c.id === selectedId ? ' selected' : '');
     chip.innerHTML = `
       <div class="agent-chip-dot ${c.activity}"></div>
@@ -248,6 +280,7 @@ function renderAgentsStrip(
       const modal = document.getElementById('agent-modal') as HTMLElement;
       const closeModalFn = () => {
         modal.style.display = 'none';
+        delete modal.dataset.taskId;
         for (const ch of office.characters.values()) ch.selected = false;
         renderAgentsStrip(container, office);
       };
@@ -262,6 +295,24 @@ function renderAgentsStrip(
 }
 
 function renderAgentModal(container: HTMLElement, char: Character, onClose: () => void): void {
+  if (container.dataset.agentId !== char.id) {
+    delete container.dataset.taskId;
+    delete container.dataset.taskTab;
+    container.dataset.agentId = char.id;
+  }
+  if (container.dataset.taskId) {
+    const entry = char.toolHistory.find((item) => item.entryId === container.dataset.taskId);
+    renderTaskInspector(container, entry, char.name, captureEnabled, () => {
+      const entryId = container.dataset.taskId;
+      delete container.dataset.taskId;
+      renderAgentModal(container, char, onClose);
+      Array.from(container.querySelectorAll<HTMLButtonElement>('[data-entry-id]')).find((button) => button.dataset.entryId === entryId)?.focus();
+    }, onClose, () => post({ type: 'openCaptureSettings' }));
+    return;
+  }
+  container.classList.remove('showing-task');
+  const historyScroll = container.querySelector('.modal-history')?.scrollTop ?? 0;
+  const focusId = (document.activeElement as HTMLElement | null)?.dataset.entryId;
   const dur = Math.round((Date.now() - char.sessionStartedAt) / 1000);
   const durStr = dur < 60 ? `${dur}s` : `${Math.floor(dur / 60)}m ${dur % 60}s`;
 
@@ -274,12 +325,12 @@ function renderAgentModal(container: HTMLElement, char: Character, onClose: () =
       const ms = e.finishedAt
         ? `${e.finishedAt - e.startedAt}ms`
         : '<span class="modal-running">…</span>';
-      return `<div class="modal-hist-entry">
+      return `<button type="button" class="modal-hist-entry" data-entry-id="${esc(e.entryId)}" aria-label="Inspect ${esc(e.toolName)} · ${outcomeLabel(e)}">
         <span class="modal-hist-icon">${statusIcon(e.status)}</span>
         <span class="modal-hist-name" title="${esc(e.toolName)}">${esc(e.toolName)}</span>
         <span class="modal-hist-dur">${ms}</span>
-        <span class="modal-hist-ago">${fmtAgo(e.startedAt)}</span>
-      </div>`;
+        <span class="modal-hist-ago task-outcome ${e.outcome}" title="${fmtAgo(e.startedAt)}">${outcomeLabel(e)} ›</span>
+      </button>`;
     }).join('') || '<div class="modal-empty">No tools yet</div>';
 
   container.innerHTML = `
@@ -287,7 +338,7 @@ function renderAgentModal(container: HTMLElement, char: Character, onClose: () =
       <div class="modal-title-row">
         <div class="modal-dot ${char.activity}"></div>
         <span class="modal-name">${esc(char.name)}</span>
-        <button class="modal-close" id="modal-close-btn">✕</button>
+        <button class="modal-close" id="modal-close-btn" aria-label="Close agent inspector">✕</button>
       </div>
       <div class="modal-status">${actLabel(char.activity)}</div>
     </div>
@@ -312,6 +363,8 @@ function renderAgentModal(container: HTMLElement, char: Character, onClose: () =
     <div class="modal-section-title">Active</div>
     <div class="modal-active-tools">${activeHtml}</div>
     <div class="modal-section-title">History</div>
+    <div class="history-hint">Select a task to inspect its input, output and events.</div>
+    <button type="button" class="capture-settings-link">${captureEnabled ? 'Payload capture on · Settings' : 'Payload capture off · Enable in Settings'}</button>
     <div class="modal-history">${histHtml}</div>
   `;
 
@@ -319,6 +372,18 @@ function renderAgentModal(container: HTMLElement, char: Character, onClose: () =
     e.stopPropagation();
     onClose();
   });
+  container.querySelector('.capture-settings-link')?.addEventListener('click', () => post({ type: 'openCaptureSettings' }));
+  for (const button of Array.from(container.querySelectorAll<HTMLButtonElement>('[data-entry-id]'))) {
+    button.addEventListener('click', () => {
+      container.dataset.taskId = button.dataset.entryId;
+      container.dataset.taskTab = 'input';
+      renderAgentModal(container, char, onClose);
+      container.querySelector<HTMLButtonElement>('[role="tab"][aria-selected="true"]')?.focus();
+    });
+  }
+  const history = container.querySelector('.modal-history');
+  if (history) history.scrollTop = historyScroll;
+  if (focusId) Array.from(container.querySelectorAll<HTMLButtonElement>('[data-entry-id]')).find((button) => button.dataset.entryId === focusId)?.focus({ preventScroll: true });
 }
 
 // ─── Utils ────────────────────────────────────────────────────────────────────
@@ -334,7 +399,7 @@ function fmt(n: number): string {
 }
 
 function esc(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 function fmtAgo(ts: number): string {

@@ -17,7 +17,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const channel = vscode.window.createOutputChannel('Copilot Pixel Agents');
   context.subscriptions.push(channel);
 
-  const store = new AgentStore();
+  const store = new AgentStore({ captureTaskDetails: config.get<boolean>('captureTaskDetails', false) });
+  context.subscriptions.push(vscode.workspace.onDidChangeConfiguration((event) => {
+    if (event.affectsConfiguration('copilotPixelAgents.captureTaskDetails')) {
+      store.setCaptureTaskDetails(vscode.workspace.getConfiguration('copilotPixelAgents').get<boolean>('captureTaskDetails', false));
+    }
+  }));
   const server = new HooksServer(store, channel, configuredPort);
 
   let port: number;

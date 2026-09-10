@@ -1,11 +1,12 @@
 import { hitTestCharacter, renderIsometric } from './isometric.js';
 import { loadSprites } from './sprites.js';
+import { legacyEntry, replaceHistory, upsertHistory } from './history.js';
+import { updateSeating, type SeatKind } from './seating.js';
 import type { ToolHistoryEntry, ToolStatus } from './types.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const TILE = 16;
-const MAX_HISTORY = 50;
 
 const FLOOR_START_Y = 2 * TILE;
 
@@ -39,6 +40,8 @@ export interface Character {
   palette: number;
   frame: number; frameTimer: number;
   direction: 'left' | 'right' | 'up' | 'down';
+  sitProgress: number;
+  seatKind: SeatKind | null;
   inputTokens: number; outputTokens: number;
   sessionStartedAt: number;
   speechBubble?: { text: string; expiresAt: number };
@@ -232,7 +235,7 @@ function computeLeisureSpots(office: Office): void {
   const tvX = (office.cols - 6) * TILE;
   const spots: LeisureSpot[] = [
     { type: 'coffee', itemX: coffeeX, itemY: 28, standX: coffeeX - 8, standY: 46, occupant: null },
-    { type: 'gaming', itemX: 20, itemY: leisureY, standX: 30, standY: leisureY + 14, occupant: null },
+    { type: 'gaming', itemX: 20, itemY: leisureY, standX: 28, standY: leisureY + 18, occupant: null },
     { type: 'tv', itemX: tvX, itemY: leisureY, standX: tvX + 18, standY: leisureY + 18, occupant: null },
   ];
 
@@ -264,7 +267,7 @@ function repositionDesks(office: Office): void {
     const { deskX, deskY } = deskPosition(idx);
     c.deskX = deskX;
     c.deskY = deskY;
-    if (c.activeTools.size > 0 || c.activity === 'waiting') {
+    if ((c.activeTools.size > 0 || c.activity === 'waiting') && c.activity !== 'walking') {
       c.x = c.targetX = deskX;
       c.y = c.targetY = deskY + TILE;
     } else if (c.idleGoal === 'desk' || c.idleGoal === null) {
@@ -303,6 +306,8 @@ export function addCharacter(office: Office, id: string, name: string): void {
     palette: nextPaletteIndex++ % 6,
     frame: 0, frameTimer: 0,
     direction: 'down',
+    sitProgress: 0,
+    seatKind: null,
     inputTokens: 0, outputTokens: 0,
     sessionStartedAt: Date.now(),
     selected: false,
@@ -321,56 +326,62 @@ export function removeCharacter(office: Office, id: string): void {
 
 export function onToolStart(
   office: Office, agentId: string, toolId: string, toolName: string, status: ToolStatus,
+  entry?: ToolHistoryEntry,
 ): void {
   const c = office.characters.get(agentId);
   if (!c) return;
-  // Snap back to desk immediately — no wandering while working
-  freeSpotsFor(office, agentId);
+  // Return naturally: seated agents first rise, then walk to their computer.
   c.idleGoal = null;
-  c.x = c.deskX;
-  c.y = c.deskY + TILE;
   c.targetX = c.deskX;
   c.targetY = c.deskY + TILE;
   c.activeTools.set(toolId, { name: toolName, status });
-  c.activity = toolStatusToActivity(status);
-  c.direction = 'up';
+  c.activity = Math.hypot(c.x - c.targetX, c.y - c.targetY) < 0.5
+    ? toolStatusToActivity(status) : 'walking';
   c.speechBubble = { text: shortToolName(toolName), expiresAt: Date.now() + 3500 };
-  c.toolHistory.unshift({ toolId, toolName, status, startedAt: Date.now() });
-  if (c.toolHistory.length > MAX_HISTORY) c.toolHistory.length = MAX_HISTORY;
+  upsertHistory(c.toolHistory, entry ?? legacyEntry(toolId, toolName, status));
   // Reset idle timer so they don't immediately dash to leisure after work ends
   c.idleTimer = IDLE_WANDER_MS * (1 + Math.random());
 }
 
-export function onToolDone(office: Office, agentId: string, toolId: string): void {
+export function onToolDone(office: Office, agentId: string, toolId: string, received?: ToolHistoryEntry): void {
   const c = office.characters.get(agentId);
   if (!c) return;
-  const entry = c.toolHistory.find((e) => e.toolId === toolId && !e.finishedAt);
-  if (entry) entry.finishedAt = Date.now();
+  if (received) upsertHistory(c.toolHistory, received);
+  else {
+    const entry = c.toolHistory.find((e) => e.toolId === toolId && e.outcome === 'running');
+    if (entry) { entry.finishedAt = Date.now(); entry.outcome = 'completed'; }
+  }
   c.activeTools.delete(toolId);
   if (c.activeTools.size === 0) {
-    c.activity = 'idle';
-    c.direction = 'down';
+    if (c.activity !== 'walking') c.activity = 'idle';
     c.idleTimer = IDLE_WANDER_MS * (0.5 + Math.random());
-  } else {
+  } else if (c.activity !== 'walking') {
     c.activity = toolStatusToActivity([...c.activeTools.values()][0].status);
   }
+}
+
+export function syncHistory(office: Office, agentId: string, history: ToolHistoryEntry[]): void {
+  const c = office.characters.get(agentId);
+  if (c) c.toolHistory = replaceHistory(history);
 }
 
 export function setWaiting(office: Office, agentId: string): void {
   const c = office.characters.get(agentId);
   if (!c) return;
-  freeSpotsFor(office, agentId);
+  c.activeTools.clear();
   c.activity = 'waiting';
-  c.direction = 'down';
-  c.idleGoal = null;
   c.speechBubble = { text: '?', expiresAt: Date.now() + 15000 };
 }
 
 export function setIdle(office: Office, agentId: string): void {
   const c = office.characters.get(agentId);
   if (!c) return;
-  c.activity = 'idle';
-  c.direction = 'down';
+  c.activeTools.clear();
+  if (c.activity !== 'walking') {
+    c.activity = Math.hypot(c.x - c.targetX, c.y - c.targetY) >= 0.5 ? 'walking'
+      : c.idleGoal && c.idleGoal !== 'desk' ? goalToActivity(c.idleGoal) : 'idle';
+  }
+  c.speechBubble = undefined;
   c.idleTimer = IDLE_WANDER_MS * (0.5 + Math.random());
 }
 
@@ -418,6 +429,13 @@ function update(office: Office, dt: number): void {
       updateIdleBehavior(office, c, dt, maxX, maxY, floorStartY);
     }
 
+    updateSeating(office, c, dt);
+    // A departing occupant reserves the seat until fully upright.
+    if (c.sitProgress === 0) {
+      for (const spot of office.leisureSpots) {
+        if (spot.occupant === c.id && c.idleGoal !== spot.type) spot.occupant = null;
+      }
+    }
     if (c.speechBubble && Date.now() > c.speechBubble.expiresAt) c.speechBubble = undefined;
   }
 }
@@ -432,7 +450,7 @@ function updateCharacterAnimation(c: Character, dt: number): void {
 }
 
 function updateCharacterMovement(c: Character, dt: number): void {
-  if (c.activity !== 'walking') return;
+  if (c.activity !== 'walking' || c.sitProgress > 0) return;
   const speed = 55 * (dt / 1000);
   const dx = c.targetX - c.x;
   const dy = c.targetY - c.y;
@@ -442,7 +460,8 @@ function updateCharacterMovement(c: Character, dt: number): void {
     c.y = c.targetY;
     // Arrived — resolve pending goal
     if (c.idleGoal === 'desk' || c.idleGoal === null) {
-      c.activity = 'idle';
+      c.activity = c.activeTools.size > 0
+        ? toolStatusToActivity([...c.activeTools.values()][0].status) : 'idle';
       c.direction = 'down';
     } else if (c.idleGoal) {
       c.activity = goalToActivity(c.idleGoal);
@@ -474,7 +493,6 @@ function updateIdleBehavior(
     c.leisureTimer -= dt;
     if (c.leisureTimer <= 0) {
       // Done — go back to desk
-      freeSpotsFor(office, c.id);
       c.idleGoal = 'desk';
       c.activity = 'walking';
       c.targetX = c.deskX;

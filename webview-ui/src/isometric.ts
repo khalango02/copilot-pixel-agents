@@ -1,5 +1,6 @@
 import type { Character, CharacterActivity, Office } from './engine.js';
-import { drawCharacterSprite } from './sprites.js';
+import { drawCharacterSprite, drawSeatedCharacterSprite } from './sprites.js';
+import { seatingGeometry } from './seating.js';
 
 // World coordinates stay on the floor. Height is a separate axis so sprites
 // remain upright instead of being flattened by a transform of the whole canvas.
@@ -8,7 +9,6 @@ type Surface = readonly [string, string, string];
 const WALL_HEIGHT = 52;
 const WOOD: Surface = ['#dbb98c', '#a67c58', '#be9469'];
 const DARK: Surface = ['#48566c', '#222e42', '#324057'];
-const TEAL: Surface = ['#78b5b0', '#3a737c', '#508f97'];
 const COLORS = ['#a8c7fa', '#e6add5', '#f2cc8f', '#95d5b2', '#c2aff2', '#f2a6a0'];
 
 export function project(x: number, y: number, z = 0): Point {
@@ -150,11 +150,14 @@ function workstation(ctx: CanvasRenderingContext2D, x: number, y: number, active
   front(ctx, x - 14, y + 21.1, 8, 18.5, 1, accent);
 }
 
-function chair(ctx: CanvasRenderingContext2D, x: number, y: number, accent: string): void {
-  shadow(ctx, x, y, 13, 13);
-  box(ctx, x + 5, y + 5, 3, 3, 9, DARK);
-  box(ctx, x, y, 14, 13, 3, [accent, '#475d75', '#627b91'], 8);
-  box(ctx, x, y + 10, 14, 3, 12, [accent, '#425c76', '#607b93'], 10);
+function chairBase(ctx: CanvasRenderingContext2D, x: number, y: number, accent: string): void {
+  box(ctx, x + 5, y + 5, 3, 3, 4, DARK);
+  box(ctx, x, y, 14, 13, 3, [accent, '#475d75', '#627b91'], 3);
+}
+
+function chairBack(ctx: CanvasRenderingContext2D, x: number, y: number, accent: string): void {
+  // Low lumbar support leaves the seated torso and typing arms visible.
+  box(ctx, x, y + 10, 14, 3, 8, [accent, '#425c76', '#607b93'], 5);
 }
 
 type DrawItem = { depth: number; draw: () => void };
@@ -201,17 +204,24 @@ function decorations(ctx: CanvasRenderingContext2D, office: Office, items: DrawI
       screen(ctx, x + 9, y + 1, 30, 9, active, office.elapsedTime);
       if (gaming) box(ctx, x + 39, y + 2, 5, 7, 12, ['#dddff1', '#8a91b0', '#b9c2da'], 9);
     });
-    add(x + 22, y + 35, () => {
-      const fabric: Surface = gaming ? ['#b0a0d3', '#786899', '#9787bc'] : ['#84afb9', '#487b8b', '#6498a6'];
-      box(ctx, x + 5, y + 23, gaming ? 22 : 43, 15, 9, fabric);
-      box(ctx, x + 5, y + 35, gaming ? 22 : 43, 4, 16, fabric);
+    const fabric: Surface = gaming ? ['#b0a0d3', '#786899', '#9787bc'] : ['#84afb9', '#487b8b', '#6498a6'];
+    shadow(ctx, x + 5, y + 23, gaming ? 22 : 43, 16);
+    // Cushion/base behind the hips; near backrest and arm in front. A single
+    // couch draw would paint the entire occupant out of existence.
+    add(x + 15, y + 29, () => {
+      box(ctx, x + 5, y + 23, gaming ? 22 : 43, 15, 4, fabric);
+      box(ctx, x + 6, y + 24, gaming ? 20 : 41, 10, 2, fabric, 4);
       if (!gaming) {
-        box(ctx, x + 4, y + 22, 4, 17, 13, fabric);
-        box(ctx, x + 45, y + 22, 4, 17, 13, fabric);
-        box(ctx, x + 10, y + 25, 12, 8, 2, TEAL, 9);
-        box(ctx, x + 29, y + 25, 12, 8, 2, TEAL, 9);
+        plane(ctx, x + 26, y + 24, 0.7, 10, 6.1, '#487b8b');
       }
     });
+    add(x + (gaming ? 16 : 26), y + 37, () => {
+      box(ctx, x + 5, y + 35, gaming ? 22 : 43, 4, 8, fabric, 4);
+    });
+    if (!gaming) {
+      add(x + 6, y + 39, () => box(ctx, x + 4, y + 22, 4, 17, 10, fabric));
+      add(x + 47, y + 39, () => box(ctx, x + 45, y + 22, 4, 17, 10, fabric));
+    }
   }
 }
 
@@ -222,12 +232,28 @@ function activityColor(activity: CharacterActivity): string {
   return activity === 'idle' ? '#b4c3d1' : '#98d9c8';
 }
 
-export function characterAnchor(c: Character): Point {
-  return project(c.x + 8, c.y + 12);
+export function characterAnchor(c: Character, sitProgress = 0): Point {
+  const ground = project(c.x + 8, c.y + 12);
+  return { x: ground.x, y: ground.y + seatingGeometry(sitProgress).drop };
 }
 
-function character(ctx: CanvasRenderingContext2D, c: Character): void {
-  const p = characterAnchor(c);
+// Renderer, hit test, labels and speech all use this exact posture geometry.
+// characterAnchor(c) remains the legacy floor anchor unless progress is given.
+export function characterPose(c: Character) {
+  const progress = c.sitProgress ?? 0;
+  const ground = characterAnchor(c);
+  const anchor = characterAnchor(c, progress);
+  const { amount } = seatingGeometry(progress);
+  return {
+    ground, anchor,
+    depth: c.x + c.y + 20,
+    bounds: { left: anchor.x - 9, right: anchor.x + 9 + 4 * amount,
+      top: anchor.y - 32, bottom: ground.y + 3 },
+  };
+}
+
+function characterShadow(ctx: CanvasRenderingContext2D, c: Character): void {
+  const p = characterPose(c).ground;
   ctx.fillStyle = 'rgba(25,42,56,0.22)';
   ctx.beginPath();
   ctx.ellipse(p.x, p.y, 7, 3, 0, 0, Math.PI * 2);
@@ -239,7 +265,14 @@ function character(ctx: CanvasRenderingContext2D, c: Character): void {
     ctx.ellipse(p.x, p.y, 10, 4.5, 0, 0, Math.PI * 2);
     ctx.stroke();
   }
-  if (!drawCharacterSprite(ctx, c.palette, c.direction, c.frame, Math.round(p.x - 8), Math.round(p.y - 32))) {
+}
+
+function character(ctx: CanvasRenderingContext2D, c: Character): void {
+  const p = characterPose(c).anchor;
+  if (c.sitProgress > 0) {
+    drawSeatedCharacterSprite(ctx, c.palette, c.frame, p.x - 8, p.y - 32,
+      c.sitProgress, c.seatKind, c.activity === 'typing' || c.activity === 'gaming');
+  } else if (!drawCharacterSprite(ctx, c.palette, c.direction, c.frame, p.x - 8, p.y - 32)) {
     ctx.fillStyle = COLORS[c.palette % COLORS.length];
     ctx.fillRect(p.x - 5, p.y - 20, 10, 17);
     ctx.fillStyle = '#f0ceaf';
@@ -248,7 +281,7 @@ function character(ctx: CanvasRenderingContext2D, c: Character): void {
 }
 
 function label(ctx: CanvasRenderingContext2D, c: Character, scale: number): void {
-  const p = characterAnchor(c);
+  const p = characterPose(c).anchor;
   // A minimum screen font size keeps labels useful in a narrow sidebar.
   const fontSize = Math.max(5, 8 / scale);
   ctx.font = `${fontSize}px monospace`;
@@ -320,9 +353,14 @@ export function renderIsometric(office: Office): void {
     const y = c?.deskY ?? (4 + Math.floor(i / 2) * 4) * 16;
     const accent = COLORS[c?.palette ?? i];
     items.push({ depth: x + y + 18, draw: () => workstation(ctx, x, y, !!c?.activeTools.size, accent, office.elapsedTime) });
-    items.push({ depth: x + y + 43, draw: () => chair(ctx, x + 1, y + 24, accent) });
+    shadow(ctx, x + 1, y + 24, 14, 13);
+    items.push({ depth: x + y + 35, draw: () => chairBase(ctx, x + 1, y + 24, accent) });
+    items.push({ depth: x + y + 44, draw: () => chairBack(ctx, x + 1, y + 24, accent) });
   }
-  for (const c of desks) items.push({ depth: c.x + c.y + 20, draw: () => character(ctx, c) });
+  for (const c of desks) {
+    characterShadow(ctx, c);
+    items.push({ depth: characterPose(c).depth, draw: () => character(ctx, c) });
+  }
   items.push({ depth: office.pet.x + office.pet.y + 14, draw: () => cat(ctx, office) });
   items.sort((a, b) => a.depth - b.depth).forEach((item) => item.draw());
   // Labels are an overlay, never hidden by furniture or other sprites.
@@ -334,9 +372,9 @@ export function hitTestCharacter(office: Office, canvasX: number, canvasY: numbe
   const camera = officeCamera(office);
   const x = (canvasX - camera.x) / camera.scale;
   const y = (canvasY - camera.y) / camera.scale;
-  const characters = [...office.characters.values()].sort((a, b) => (b.x + b.y) - (a.x + a.y));
+  const characters = [...office.characters.values()].reverse().sort((a, b) => characterPose(b).depth - characterPose(a).depth);
   return characters.find((c) => {
-    const p = characterAnchor(c);
-    return x >= p.x - 9 && x <= p.x + 9 && y >= p.y - 32 && y <= p.y + 3;
+    const bounds = characterPose(c).bounds;
+    return x >= bounds.left && x <= bounds.right && y >= bounds.top && y <= bounds.bottom;
   });
 }

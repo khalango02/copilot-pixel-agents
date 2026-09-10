@@ -1,7 +1,7 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 import type { AgentStore } from './agentStore.js';
-import type { ClientMessage, ServerMessage, ToolStatus } from './types.js';
+import type { ClientMessage, ServerMessage, ToolStatus, ToolHistoryEntry } from './types.js';
 
 export class PixelOfficeViewProvider implements vscode.WebviewViewProvider {
   private view?: vscode.WebviewView;
@@ -40,11 +40,15 @@ export class PixelOfficeViewProvider implements vscode.WebviewViewProvider {
   private handleClientMessage(msg: ClientMessage): void {
     switch (msg.type) {
       case 'webviewReady':
+        this.post({ type: 'captureSettings', enabled: this.store.captureTaskDetails });
         this.sendExistingAgents();
         this.post({ type: 'serverPort', port: this.serverPort });
         break;
       case 'installHooks':
         vscode.commands.executeCommand('copilotPixelAgents.installHooks');
+        break;
+      case 'openCaptureSettings':
+        vscode.commands.executeCommand('workbench.action.openSettings', 'copilotPixelAgents.captureTaskDetails');
         break;
       case 'focusAgent':
         break;
@@ -60,11 +64,17 @@ export class PixelOfficeViewProvider implements vscode.WebviewViewProvider {
     this.store.on('agentRemoved', (id: string) => {
       this.post({ type: 'agentRemoved', id });
     });
-    this.store.on('agentToolStart', (id: string, toolId: string, toolName: string, status: ToolStatus) => {
-      this.post({ type: 'agentToolStart', id, toolId, toolName, status });
+    this.store.on('agentToolStart', (id: string, toolId: string, toolName: string, status: ToolStatus, entry: ToolHistoryEntry) => {
+      this.post({ type: 'agentToolStart', id, toolId, toolName, status, entry });
     });
-    this.store.on('agentToolDone', (id: string, toolId: string) => {
-      this.post({ type: 'agentToolDone', id, toolId });
+    this.store.on('agentToolDone', (id: string, toolId: string, entry: ToolHistoryEntry) => {
+      this.post({ type: 'agentToolDone', id, toolId, entry });
+    });
+    this.store.on('agentHistory', (id: string, history: ToolHistoryEntry[]) => {
+      this.post({ type: 'agentHistory', id, history });
+    });
+    this.store.on('captureSettings', (enabled: boolean) => {
+      this.post({ type: 'captureSettings', enabled });
     });
     this.store.on('agentStatus', (id: string, status: 'idle' | 'waiting' | 'active') => {
       this.post({ type: 'agentStatus', id, status });
@@ -75,7 +85,7 @@ export class PixelOfficeViewProvider implements vscode.WebviewViewProvider {
   }
 
   private sendExistingAgents(): void {
-    const agents = this.store.getAll().map((a) => ({ id: a.id, name: a.name }));
+    const agents = this.store.getSnapshots();
     this.post({ type: 'existingAgents', agents });
   }
 

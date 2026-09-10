@@ -2,9 +2,9 @@ import * as fs from 'fs';
 import * as http from 'http';
 import * as os from 'os';
 import * as path from 'path';
-import * as vscode from 'vscode';
+import type * as vscode from 'vscode';
 import type { AgentStore } from './agentStore.js';
-import type { HookEvent } from './types.js';
+import { createHookRequestHandler } from './hookHttp.js';
 
 const DEFAULT_PORT = 7823;
 
@@ -26,25 +26,9 @@ export class HooksServer {
 
   start(): Promise<number> {
     return new Promise((resolve, reject) => {
-      this.server = http.createServer((req, res) => {
-        if (req.method !== 'POST') {
-          res.writeHead(405);
-          res.end('Method Not Allowed');
-          return;
-        }
-
-        let body = '';
-        req.on('data', (chunk) => (body += chunk.toString()));
-        req.on('end', () => {
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end('{}');
-          this.handleBody(body);
-        });
-        req.on('error', () => {
-          res.writeHead(400);
-          res.end('Bad Request');
-        });
-      });
+      this.server = http.createServer(createHookRequestHandler(this.store, (metadata) => this.channel.appendLine(metadata)));
+      this.server.requestTimeout = 10_000;
+      this.server.headersTimeout = 10_000;
 
       this.server.on('error', (err: NodeJS.ErrnoException) => {
         if (err.code === 'EADDRINUSE') {
@@ -57,6 +41,8 @@ export class HooksServer {
       });
 
       this.server.on('listening', () => {
+        const address = this.server!.address();
+        if (address && typeof address !== 'string') this.port = address.port;
         console.log(`[Copilot Pixel Agents] Hooks server listening on port ${this.port}`);
         this.writePortFile(this.port);
         resolve(this.port);
@@ -64,19 +50,6 @@ export class HooksServer {
 
       this.server.listen(this.port, '127.0.0.1');
     });
-  }
-
-  private handleBody(body: string): void {
-    try {
-      const event = JSON.parse(body) as HookEvent;
-      const tool = 'tool_name' in event ? event.tool_name : '';
-      this.channel.appendLine(
-        `[${new Date().toLocaleTimeString()}] ← ${event.event}  session=${event.session_id.slice(0, 8)}${tool ? `  tool=${tool}` : ''}`,
-      );
-      this.store.processEvent(event);
-    } catch {
-      this.channel.appendLine(`[${new Date().toLocaleTimeString()}] ← invalid payload: ${body.slice(0, 120)}`);
-    }
   }
 
   private writePortFile(port: number): void {
