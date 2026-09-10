@@ -1,6 +1,6 @@
 # Copilot Pixel Agents
 
-**Versão atual: 0.6.0** — escritório isométrico, agentes sentados e inspetor de tarefas.
+**Versão atual: 0.6.1** — escritório isométrico, agentes sentados e inspetor de tarefas.
 
 > Ao atualizar, reinstale os hooks e habilite **Capture Task Details** nas configurações para reter os conteúdos das próximas tarefas. A captura é opcional e vem desativada por padrão.
 
@@ -8,11 +8,15 @@ Visualize seus agentes de IA como personagens pixel art animados em um escritór
 
 Compatível com **GitHub Copilot Agent Mode** e **Claude Code**.
 
-[Marketplace](https://marketplace.visualstudio.com/items?itemName=cl-oliveira.copilot-pixel-agents) · [Release v0.6.0](https://github.com/khalango02/copilot-pixel-agents/tree/v0.6.0) · [Histórico de versões](CHANGELOG.md)
+[Marketplace](https://marketplace.visualstudio.com/items?itemName=cl-oliveira.copilot-pixel-agents) · [Release v0.6.1](https://github.com/khalango02/copilot-pixel-agents/tree/v0.6.1) · [Histórico de versões](CHANGELOG.md)
 
-![Demonstração do escritório pixel art em uma versão anterior](.github/preview.gif)
+![Copilot Pixel Agents 0.6.0: escritório isométrico com agentes sentados e inspetor de tarefas aberto na aba Output](.github/preview-v0.6.0.png)
 
-> O GIF acima mostra o visual anterior; desde a versão 0.5.0, o escritório usa a perspectiva isométrica descrita abaixo.
+> Interface da versão **0.6.0**, com agentes e dados fictícios para demonstração. A imagem mostra o escritório isométrico, as poses sentadas e a inspeção do resultado de uma tarefa.
+
+## Novidades da versão 0.6.1
+
+- Documentação visual atualizada: o GIF antigo foi substituído pela captura acima. Sem alterações funcionais em relação à versão 0.6.0.
 
 ## Novidades da versão 0.5.0
 

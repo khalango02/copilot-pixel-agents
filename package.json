@@ -2,7 +2,7 @@
   "name": "copilot-pixel-agents",
   "displayName": "Copilot Pixel Agents",
   "description": "Visualize GitHub Copilot agents as animated pixel-art characters in an isometric 2.5D office",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "publisher": "cl-oliveira",
   "license": "MIT",
   "icon": "media/icon.png",

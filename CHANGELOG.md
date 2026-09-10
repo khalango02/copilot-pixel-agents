@@ -1,6 +1,11 @@
 # Changelog
 
-## [0.6.0] — 2026-09-10 (current)
+## [0.6.1] — 2026-09-10 (current)
+
+### Documentation
+- Replaced the legacy animated GIF with a screenshot of the v0.6.0 isometric office, seated agents and task inspector, using demonstration data.
+
+## [0.6.0] — 2026-09-10
 
 ### Added
 - Animated seated poses at computers, gaming seats and TV couches, with 300 ms sit/stand transitions, articulated limbs and posture-aware selection.
