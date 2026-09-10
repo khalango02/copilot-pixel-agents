@@ -6,9 +6,9 @@ html, body {
 }
 
 body {
-  background: #1e1e2e;
-  color: #cdd6f4;
-  font-family: 'Courier New', monospace;
+  background: #131d2d;
+  color: #dce6ef;
+  font-family: var(--vscode-font-family, system-ui, sans-serif);
   font-size: 11px;
 }
 
@@ -21,16 +21,16 @@ body {
 
 /* ── Status bar */
 #status-bar {
-  background: #181825;
-  color: #6c7086;
+  background: #111a29;
+  color: #9caec4;
   font-size: 9px;
-  padding: 2px 8px;
-  border-bottom: 1px solid #313244;
+  padding: 5px 12px;
+  border-bottom: 1px solid #29384d;
   flex-shrink: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  height: 18px;
+  height: 24px;
 }
 
 /* ── Canvas wrapper — this is what flex grows, NOT the canvas itself */
@@ -39,7 +39,41 @@ body {
   min-height: 0;
   position: relative;
   overflow: hidden;
+  background: radial-gradient(ellipse at 50% 42%, #2d4058 0%, #1b2a40 48%, #111c2d 100%);
 }
+
+#scene-heading {
+  position: absolute;
+  top: 18px;
+  left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  pointer-events: none;
+}
+.scene-eyebrow { color: #a1b8cf; font-size: 8px; letter-spacing: .18em; }
+.scene-title { color: #e2ebf4; font-size: 18px; font-weight: 600; letter-spacing: -.03em; }
+.scene-badge {
+  display: inline-block; margin-left: 8px; padding: 3px 5px;
+  color: #a9dacb; background: #28444b; border: 1px solid #426269;
+  border-radius: 5px; font-size: 8px; vertical-align: middle; letter-spacing: .04em;
+}
+#view-controls {
+  position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 4px; padding: 5px;
+  border: 1px solid #43556e; border-radius: 10px;
+  background: rgba(17, 28, 45, .94); box-shadow: 0 4px 16px #0b14294d;
+  white-space: nowrap;
+}
+.view-hint { padding: 0 8px; color: #a5b8ce; font-size: 9px; }
+#view-controls button {
+  width: 28px; height: 26px; border: 0; border-radius: 5px;
+  background: #2b3d54; color: #e1eaf4; font-size: 17px; cursor: pointer;
+}
+#view-controls button:hover { background: #415874; }
+#view-controls button:disabled { opacity: .35; cursor: default; }
+#view-controls output { min-width: 36px; text-align: center; color: #c5d6e5; font-size: 9px; }
+button:focus-visible, .agent-chip:focus-visible { outline: 2px solid #a9dacb; outline-offset: 2px; }
 
 /* Canvas fills its wrapper absolutely so intrinsic size never fights flex */
 #office-canvas {
@@ -50,27 +84,32 @@ body {
   display: block;
   image-rendering: pixelated;
   image-rendering: crisp-edges;
-  cursor: default;
+  cursor: grab;
+  touch-action: none;
 }
+#office-canvas.dragging { cursor: grabbing; }
 
 /* ── Empty state overlay */
 #empty-overlay {
   position: absolute;
-  top: 0; left: 0;
-  width: 100%; height: 100%;
+  bottom: 62px; left: 50%; transform: translateX(-50%);
+  width: min(310px, calc(100% - 28px));
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  background: rgba(15, 12, 22, 0.82);
+  background: rgba(20, 32, 49, 0.94);
+  border: 1px solid #43566d;
+  border-radius: 12px;
+  box-shadow: 0 8px 24px #07111d40;
   text-align: center;
-  padding: 16px;
+  padding: 12px;
   z-index: 10;
 }
 .empty-icon { font-size: 28px; line-height: 1; }
 .empty-title { font-size: 12px; font-weight: bold; color: #cdd6f4; }
-.empty-subtitle { font-size: 9px; color: #6c7086; line-height: 1.5; }
+.empty-subtitle { font-size: 10px; color: #a6b8cc; line-height: 1.5; }
 #empty-overlay button {
   margin-top: 4px;
   padding: 5px 14px;
@@ -90,11 +129,11 @@ body {
 /* ── Bottom panel — slim chip strip only */
 #bottom-panel {
   flex-shrink: 0;
-  background: #181825;
-  border-top: 1px solid #313244;
+  background: #111a29;
+  border-top: 1px solid #29384d;
   min-height: 32px;
   max-height: 48px;
-  overflow: hidden;
+  overflow: auto;
 }
 
 /* ── Agent chips strip */
@@ -106,7 +145,7 @@ body {
 }
 
 .agents-empty {
-  color: #45475a;
+  color: #9caec4;
   font-size: 9px;
   padding: 5px 7px;
 }
@@ -115,14 +154,26 @@ body {
   display: flex;
   align-items: center;
   gap: 4px;
-  background: #313244;
+  background: #27384f;
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: 6px;
   padding: 3px 7px;
   cursor: pointer;
 }
 .agent-chip:hover { border-color: #585b70; }
 .agent-chip.selected { border-color: #cba6f7; }
+
+@media (max-width: 300px) {
+  .view-hint { display: none; }
+  #scene-heading { left: 12px; top: 12px; }
+  .scene-title { font-size: 15px; }
+}
+@media (max-height: 350px) {
+  #scene-heading { top: 8px; }
+  .scene-eyebrow { display: none; }
+  #empty-overlay { padding: 8px; bottom: 52px; }
+  .empty-subtitle { display: none; }
+}
 
 .agent-chip-dot {
   width: 6px; height: 6px;

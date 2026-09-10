@@ -1,6 +1,23 @@
 # Changelog
 
-## [0.4.4] — 2026-06-09 (current)
+## [0.5.0] — 2026-09-10 (current)
+
+### Added
+- Isometric 2.5D office with diamond floor tiles, two walls, volumetric furniture, lighting and shadows while preserving pixel-art characters.
+- Camera zoom controls, drag-to-pan navigation and a fit-to-view button.
+- Regression tests for projection, responsive framing, selection, camera interaction, layout and rendering fallbacks.
+
+### Changed
+- Characters, furniture and the pet now render in depth order; character selection uses the same projection as the camera.
+- Office layout grows with the number of agents and remains independent of viewport size, preserving work and leisure activities during resizing.
+- Refreshed office header, agent strip and compact empty state that keeps the scene visible.
+
+## [0.4.12] — 2026-08-06
+
+### Fixed
+- Idle-wandering agents could pick the exact same random spot on the floor and end up with their sprites stacked on top of each other — added collision avoidance between characters (same pattern already used to keep the pet off the furniture), with a minimum on-screen separation and a few retries when picking a wander target
+
+## [0.4.4] — 2026-06-09
 
 ### Fixed
 - `TypeError: i.includes is not a function` crash during Copilot hooks install — `chat.hookFilesLocations` can return a non-array in VS Code versions where the setting is not registered; now handled defensively with `Array.isArray()` check and the update is wrapped in try/catch so it never breaks the install flow

@@ -1,11 +1,9 @@
 **/.git/**
 **/node_modules/**
-webview-ui/node_modules/**
-webview-ui/src/**
-webview-ui/public/**
+webview-ui/**
 src/**
 *.ts
-*.map
+**/*.map
 esbuild.js
 tsconfig.json
 .editorconfig

@@ -5,8 +5,10 @@ import {
   onToolDone,
   onToolStart,
   removeCharacter,
+  resetOfficeView,
   resizeOffice,
   setIdle,
+  setOfficeZoom,
   setWaiting,
   startLoop,
 } from './engine.js';
@@ -35,17 +37,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const canvas = document.createElement('canvas');
   canvas.id = 'office-canvas';
+  canvas.setAttribute('aria-label', 'Isometric pixel office. Drag to pan; use the view controls to zoom.');
   canvasWrap.appendChild(canvas);
+
+  const sceneHeading = document.createElement('div');
+  sceneHeading.id = 'scene-heading';
+  sceneHeading.innerHTML = '<span class="scene-eyebrow">COPILOT PIXEL AGENTS</span><span class="scene-title">The little office<span class="scene-badge">2.5D</span></span>';
+  canvasWrap.appendChild(sceneHeading);
 
   // Empty-state overlay (shown when no agents; hidden otherwise)
   const emptyOverlay = document.createElement('div');
   emptyOverlay.id = 'empty-overlay';
   emptyOverlay.innerHTML = `
-    <div class="empty-icon">👾</div>
-    <div class="empty-title">No active agents</div>
-    <div class="empty-subtitle">Run an agent and it will appear here.<br>Make sure hooks are installed first.</div>
+    <div class="empty-title">Your team's next workspace.</div>
+    <div class="empty-subtitle">Start a Copilot agent to bring the office to life.</div>
     <button id="install-hooks-btn">⚙ Install / Reinstall Hooks</button>
-    <div class="empty-hint">Or: <code>Ctrl+Shift+P</code> → Copilot Pixel Agents: Install Hooks</div>
   `;
   canvasWrap.appendChild(emptyOverlay);
 
@@ -75,6 +81,36 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Create office (sets up click handler)
   const office = createOffice(canvas);
+
+  const viewControls = document.createElement('div');
+  viewControls.id = 'view-controls';
+  viewControls.setAttribute('role', 'group');
+  viewControls.setAttribute('aria-label', 'Office view controls');
+  viewControls.innerHTML = `
+    <span class="view-hint">Drag to explore</span>
+    <button type="button" id="zoom-out" aria-label="Zoom out" title="Zoom out">−</button>
+    <output id="zoom-level" aria-live="polite">100%</output>
+    <button type="button" id="zoom-in" aria-label="Zoom in" title="Zoom in">+</button>
+    <button type="button" id="reset-view" aria-label="Fit office to view" title="Fit office to view">↺</button>
+  `;
+  canvasWrap.appendChild(viewControls);
+  const updateZoomControls = () => {
+    viewControls.querySelector('output')!.textContent = `${Math.round(office.zoom * 100)}%`;
+    (viewControls.querySelector('#zoom-out') as HTMLButtonElement).disabled = office.zoom <= 0.5;
+    (viewControls.querySelector('#zoom-in') as HTMLButtonElement).disabled = office.zoom >= 3;
+  };
+  viewControls.querySelector('#zoom-out')!.addEventListener('click', () => {
+    setOfficeZoom(office, office.zoom / 1.25);
+    updateZoomControls();
+  });
+  viewControls.querySelector('#zoom-in')!.addEventListener('click', () => {
+    setOfficeZoom(office, office.zoom * 1.25);
+    updateZoomControls();
+  });
+  viewControls.querySelector('#reset-view')!.addEventListener('click', () => {
+    resetOfficeView(office);
+    updateZoomControls();
+  });
 
   // ── Canvas responsive sizing via ResizeObserver ──────────────────────────
   // Initial size from wrapper (canvas itself has no intrinsic CSS size yet)

@@ -59,6 +59,16 @@ Após instalar os hooks:
 2. Inicie uma sessão de agente normalmente (Copilot em Agent Mode ou `claude` no terminal)
 3. Cada sessão aparece como um personagem no escritório virtual
 
+### Escritório isométrico
+
+O cenário usa uma perspectiva **2,5D** com piso em losangos, paredes e móveis
+volumétricos, sombras e sobreposição por profundidade, mantendo os personagens pixel art.
+
+- **Arraste o cenário** para navegar pelo escritório.
+- Use **+ / −** para aproximar ou afastar a câmera e **↺** para reenquadrar a sala.
+- Clique em um personagem ou no seu nome na barra inferior para ver as atividades.
+- O escritório cresce conforme novos agentes chegam; redimensionar o painel não interrompe suas atividades.
+
 ---
 
 ## Eventos suportados
@@ -99,6 +109,11 @@ cd webview-ui && npm install && cd ..
 
 Pressione `F5` no VS Code para abrir uma janela de desenvolvimento com a extensão carregada.
 
+Após instalar as dependências da raiz e da webview, valide a interface com
+`npm --prefix webview-ui test` e `npm --prefix webview-ui run typecheck`.
+Os testes cobrem projeção, enquadramento responsivo, zoom, arraste, seleção,
+preservação das atividades ao redimensionar e renderização sem sprites disponíveis.
+
 ---
 
 ## Estrutura do projeto
@@ -113,7 +128,8 @@ copilot-pixel-agents/
 │   ├── hooksInstaller.ts   # Instala hook.sh e configura Copilot + Claude Code
 │   └── types.ts
 ├── webview-ui/src/         # Canvas pixel art (TypeScript + Vite)
-│   ├── engine.ts           # Motor de animação (canvas 2D, 2× scale)
+│   ├── engine.ts           # Simulação, layout e interação com a câmera
+│   ├── isometric.ts        # Projeção 2,5D, cenário, profundidade e seleção
 │   ├── sprites.ts          # Carregamento de sprites
 │   ├── main.ts             # Bootstrap e handler de mensagens
 │   └── style.css

@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "build": "vite build",
-    "dev": "vite"
+    "dev": "vite",
+    "test": "node --test tests/*.test.mjs",
+    "typecheck": "tsc --noEmit --strict --target ES2022 --module ESNext --moduleResolution bundler --lib ES2022,DOM src/main.ts src/isometric.ts"
   },
   "devDependencies": {
     "typescript": "^5.7.0",
