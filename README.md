@@ -1,18 +1,18 @@
 # Copilot Pixel Agents
 
-**Versão atual: 0.5.0** — escritório isométrico 2,5D.
+**Versão atual: 0.6.0** — escritório isométrico, agentes sentados e inspetor de tarefas.
 
-> Versão publicada de referência: **0.5.0**. As funcionalidades da seção **Em desenvolvimento** abaixo estão no código-fonte do repositório e ainda não foram publicadas em uma nova versão no Marketplace.
+> Ao atualizar, reinstale os hooks e habilite **Capture Task Details** nas configurações para reter os conteúdos das próximas tarefas. A captura é opcional e vem desativada por padrão.
 
 Visualize seus agentes de IA como personagens pixel art animados em um escritório com profundidade, móveis volumétricos e atividades em tempo real.
 
 Compatível com **GitHub Copilot Agent Mode** e **Claude Code**.
 
-[Marketplace](https://marketplace.visualstudio.com/items?itemName=cl-oliveira.copilot-pixel-agents) · [Release v0.5.0](https://github.com/khalango02/copilot-pixel-agents/tree/v0.5.0) · [Histórico de versões](CHANGELOG.md)
+[Marketplace](https://marketplace.visualstudio.com/items?itemName=cl-oliveira.copilot-pixel-agents) · [Release v0.6.0](https://github.com/khalango02/copilot-pixel-agents/tree/v0.6.0) · [Histórico de versões](CHANGELOG.md)
 
 ![Demonstração do escritório pixel art em uma versão anterior](.github/preview.gif)
 
-> O GIF acima mostra o visual anterior; a versão 0.5.0 usa a perspectiva isométrica descrita abaixo.
+> O GIF acima mostra o visual anterior; desde a versão 0.5.0, o escritório usa a perspectiva isométrica descrita abaixo.
 
 ## Novidades da versão 0.5.0
 
@@ -23,7 +23,7 @@ Compatível com **GitHub Copilot Agent Mode** e **Claude Code**.
 - **Interface renovada:** cabeçalho, barra de agentes, seleção adaptada à projeção e estado vazio compacto, sem esconder todo o escritório.
 - **Qualidade e distribuição:** nove testes de regressão da webview, verificação de tipos e pacote VSIX sem fontes de desenvolvimento ou sourcemaps.
 
-## Em desenvolvimento — poses sentadas e inspetor de tarefas
+## Novidades da versão 0.6.0 — poses sentadas e inspetor de tarefas
 
 - **Sentar e levantar:** transições suaves de aproximadamente 300 ms de simulação nas cadeiras do computador, no assento de jogos e no sofá da TV. Cabeça e tronco mantêm a proporção pixel art; pernas dobram e os braços animam a digitação ou o controle.
 - **Interação com os móveis:** o personagem só senta quando chega ao assento correto e olha para a tela. Bases e encostos têm camadas separadas; seleção e balões acompanham a postura.
@@ -127,7 +127,7 @@ volumétricos, sombras e sobreposição por profundidade, mantendo os personagen
 
 ### Inspecionar o que passou por uma tarefa
 
-1. Instale a versão com as alterações em desenvolvimento e execute **Install Copilot Hooks** para atualizar o transporte dos eventos.
+1. Instale a versão **0.6.0 ou superior** e execute **Install Copilot Hooks** para atualizar o transporte dos eventos.
 2. Nas configurações, habilite **Copilot Pixel Agents: Capture Task Details** (`copilotPixelAgents.captureTaskDetails`). O link **Enable in Settings** no histórico abre essa configuração, sem ativá-la automaticamente.
 3. Execute uma **nova tarefa** com o agente. Abra o personagem e clique na linha da tarefa em **History**.
 4. Navegue pelas abas:
@@ -217,7 +217,7 @@ Disponíveis na paleta de comandos, sob a categoria **Copilot Pixel Agents**:
 | **Install Copilot Hooks** | Instala ou atualiza os scripts e configura Copilot e Claude Code |
 | **Show Hooks Configuration** | Abre um documento informativo com caminhos de configuração |
 
-> Na versão 0.5.0, **Show Hooks Configuration** ainda lista o caminho legado do Copilot e o script Unix, inclusive no Windows. Para os destinos efetivos, consulte a tabela de instalação deste README.
+> Na versão 0.6.0, **Show Hooks Configuration** ainda lista o caminho legado do Copilot e o script Unix, inclusive no Windows. Para os destinos efetivos, consulte a tabela de instalação deste README.
 
 ## Configurações
 

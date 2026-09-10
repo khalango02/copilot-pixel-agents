@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.6.0] — 2026-09-10 (current)
 
 ### Added
 - Animated seated poses at computers, gaming seats and TV couches, with 300 ms sit/stand transitions, articulated limbs and posture-aware selection.
@@ -16,12 +16,13 @@
 - Removed raw stdin/environment logging from newly generated hooks; existing legacy logs are not deleted. The HTTP handler rejects malformed/oversized requests without logging their contents.
 - Refreshed README with current behavior, privacy limits, migration, testing and the distinction between hook inspection and VS Code internal chat debugging.
 - Updated transitive webview development dependencies to resolve the audit findings in nanoid/PostCSS.
+- Excluded local Python virtual environments and bytecode caches from the VSIX package.
 
 ### Fixed
 - Tool history correlation now uses invocation IDs and avoids guessing matches by tool name; duplicate correlated start/completion events do not create duplicate entries.
 - Waiting/idle UI transitions no longer retain stale typing indicators; low seat backs and character overlays follow seated geometry.
 
-## [0.5.0] — 2026-09-10 (current)
+## [0.5.0] — 2026-09-10
 
 ### Added
 - Isometric 2.5D office with diamond floor tiles, two walls, volumetric furniture, lighting and shadows while preserving pixel-art characters.
