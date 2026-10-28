@@ -1,6 +1,6 @@
 # Copilot Pixel Agents
 
-**Versão atual: 0.6.1** — escritório isométrico, agentes sentados e inspetor de tarefas.
+**Versão atual: 0.7.0** — escritório isométrico e inspetor de tarefas, com melhorias de testes, qualidade e automação de releases.
 
 > Ao atualizar, reinstale os hooks e habilite **Capture Task Details** nas configurações para reter os conteúdos das próximas tarefas. A captura é opcional e vem desativada por padrão.
 
@@ -8,11 +8,20 @@ Visualize seus agentes de IA como personagens pixel art animados em um escritór
 
 Compatível com **GitHub Copilot Agent Mode** e **Claude Code**.
 
-[Marketplace](https://marketplace.visualstudio.com/items?itemName=cl-oliveira.copilot-pixel-agents) · [Release v0.6.1](https://github.com/khalango02/copilot-pixel-agents/tree/v0.6.1) · [Histórico de versões](CHANGELOG.md)
+[Marketplace](https://marketplace.visualstudio.com/items?itemName=cl-oliveira.copilot-pixel-agents) · [Release v0.7.0](https://github.com/khalango02/copilot-pixel-agents/tree/v0.7.0) · [Histórico de versões](CHANGELOG.md) · [Plano de melhorias](PLANO_MELHORIAS.md)
 
 ![Copilot Pixel Agents 0.6.0: escritório isométrico com agentes sentados e inspetor de tarefas aberto na aba Output](.github/preview-v0.6.0.png)
 
 > Interface da versão **0.6.0**, com agentes e dados fictícios para demonstração. A imagem mostra o escritório isométrico, as poses sentadas e a inspeção do resultado de uma tarefa.
+
+## Novidades da versão 0.7.0
+
+- **Qualidade automatizada:** CI com verificação de tipos, testes, auditoria de dependências de produção, build e empacotamento VSIX.
+- **Releases automatizadas:** pipeline acionado por tags, com validação de versão, GitHub Release e publicação no Marketplace quando a credencial estiver configurada.
+- **Cobertura ampliada:** verificação de tipos de toda a webview, testes de animação e sprites e execução real dos scripts de hooks nos testes de integração.
+- **Manutenção:** Dependabot, orientações de contribuição e segurança e maior rastreabilidade de versões.
+
+Esta versão melhora ferramentas e processos, sem alterar o comportamento funcional da extensão. As próximas evoluções técnicas e de usabilidade estão no [plano de melhorias](PLANO_MELHORIAS.md) e ainda não foram implementadas.
 
 ## Novidades da versão 0.6.1
 

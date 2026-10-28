@@ -2,6 +2,12 @@
 
 > **Note on 0.4.x history:** versions 0.4.5–0.4.9 were packaged and distributed as `.vsix` files but their `package.json` version bumps were never committed to this repository, so their exact contents cannot be reconstructed from git history. The entry below for 0.4.10 has been reconstructed from the corresponding commits. Going forward, every published version is tagged and built by CI (see `.github/workflows/ci.yml`) so this gap cannot recur.
 
+## [Unreleased]
+
+### Documentation
+- Align the README's current version and release link with the existing 0.7.0 package and summarize its tooling improvements.
+- Add a technical and usability improvement plan with priorities and acceptance criteria. Planned features are not implemented by this documentation update.
+
 ## [0.7.0] — 2026-09-14 (current)
 
 Project tooling and process, not runtime behavior — no user-facing changes to the
